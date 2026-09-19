@@ -3,6 +3,165 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { PROGRAM, hasSessionData } from "@/lib/program";
 
+// ─── Export Utilities ────────────────────────────────────────────────────────
+
+function formatSessionAsText(session, program) {
+  const { date, day, items } = session;
+  const programDay = program[day] || program.day1;
+  const lines = [];
+  lines.push(`📅 ${date}  •  ${programDay.title}`);
+  lines.push(`${programDay.subtitle}`);
+  lines.push("");
+
+  programDay.sections.forEach((section, sIdx) => {
+    const sectionLines = [];
+    section.items.forEach((item, iIdx) => {
+      const key = `${sIdx}:${iIdx}`;
+      const saved = items?.[key];
+      if (!saved) return;
+
+      if (item.kind === "simple") {
+        if (saved.done) sectionLines.push(`  ✓ ${item.name}`);
+      } else if (item.kind === "sets") {
+        if (!saved.sets) return;
+        const setEntries = Object.entries(saved.sets).sort(
+          ([a], [b]) => Number(a) - Number(b)
+        );
+        const anyData = setEntries.some(
+          ([, s]) => s.weight || s.reps || s.done
+        );
+        if (!anyData) return;
+        sectionLines.push(`  ${item.name}`);
+        setEntries.forEach(([num, s]) => {
+          if (!s.weight && !s.reps && !s.done) return;
+          const parts = [];
+          if (s.weight) parts.push(s.weight);
+          if (s.reps) parts.push(`${s.reps} reps`);
+          const check = s.done ? "✓" : "○";
+          sectionLines.push(`    Set ${num}: ${parts.join(" × ")} ${check}`);
+        });
+      } else if (item.kind === "result") {
+        if (!saved.value1 && !saved.value2) return;
+        sectionLines.push(`  ${item.name}`);
+        if (saved.value1) sectionLines.push(`    ${item.label1}: ${saved.value1}`);
+        if (saved.value2) sectionLines.push(`    ${item.label2}: ${saved.value2}`);
+        if (saved.done) sectionLines.push(`    ✓ Done`);
+      }
+    });
+
+    if (sectionLines.length > 0) {
+      lines.push(`── ${section.title} ──`);
+      lines.push(...sectionLines);
+      lines.push("");
+    }
+  });
+
+  return lines.join("\n").trimEnd();
+}
+
+function downloadFile(content, filename, mimeType) {
+  const blob = new Blob([content], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// ─── Export Modal Component ───────────────────────────────────────────────────
+
+function ExportModal({ onClose, currentSession, historyList, program }) {
+  const [scope, setScope] = useState("current");
+  const [format, setFormat] = useState("text");
+
+  const hasHistory = historyList && historyList.length > 0;
+
+  function handleExport() {
+    if (format === "json") {
+      if (scope === "current") {
+        const content = JSON.stringify(currentSession, null, 2);
+        downloadFile(content, `workout-${currentSession.date}-${currentSession.day}.json`, "application/json");
+      } else {
+        const content = JSON.stringify(historyList, null, 2);
+        downloadFile(content, `workout-history.json`, "application/json");
+      }
+    } else {
+      // text format
+      if (scope === "current") {
+        const text = formatSessionAsText(currentSession, program);
+        downloadFile(text, `workout-${currentSession.date}-${currentSession.day}.txt`, "text/plain");
+      } else {
+        const parts = historyList
+          .map((s) => formatSessionAsText(s, program))
+          .filter(Boolean)
+          .join("\n\n" + "─".repeat(40) + "\n\n");
+        downloadFile(parts, `workout-history.txt`, "text/plain");
+      }
+    }
+    onClose();
+  }
+
+  return (
+    <div className="export-overlay" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="export-modal" role="dialog" aria-modal="true" aria-labelledby="export-modal-title">
+        <div className="export-modal-header">
+          <p className="export-modal-title" id="export-modal-title">Export Workouts</p>
+          <button className="export-modal-close" onClick={onClose} aria-label="Close export">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="18" y1="6" x2="6" y2="18"/>
+              <line x1="6" y1="6" x2="18" y2="18"/>
+            </svg>
+          </button>
+        </div>
+        <p className="export-modal-subtitle">Download your workout data locally.</p>
+
+        <div className="export-scope-row">
+          <button
+            id="export-scope-current"
+            className={`export-scope-btn${scope === "current" ? " active" : ""}`}
+            onClick={() => setScope("current")}
+          >This Session</button>
+          <button
+            id="export-scope-history"
+            className={`export-scope-btn${scope === "history" ? " active" : ""}`}
+            onClick={() => setScope("history")}
+            disabled={!hasHistory}
+            title={!hasHistory ? "No history available" : undefined}
+            style={!hasHistory ? { opacity: 0.4, cursor: "not-allowed" } : undefined}
+          >Full History</button>
+        </div>
+
+        <div className="export-format-label">Format</div>
+        <div className="export-format-cards">
+          <button
+            id="export-format-text"
+            className={`export-format-card${format === "text" ? " selected" : ""}`}
+            onClick={() => setFormat("text")}
+          >
+            <span className="export-format-icon">💬</span>
+            <div className="export-format-name">.txt</div>
+            <div className="export-format-desc">Readable text — easy to copy &amp; share in a message</div>
+          </button>
+          <button
+            id="export-format-json"
+            className={`export-format-card${format === "json" ? " selected" : ""}`}
+            onClick={() => setFormat("json")}
+          >
+            <span className="export-format-icon">🗂️</span>
+            <div className="export-format-name">.json</div>
+            <div className="export-format-desc">Raw data — full session structure, weights &amp; reps</div>
+          </button>
+        </div>
+
+        <button id="export-download-btn" className="export-download-btn" onClick={handleExport}>
+          ↓ Download {format === "text" ? ".txt" : ".json"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 const STORAGE_KEY = "workout_tracker_local_cache";
 
 function getLocalDateString() {
@@ -21,6 +180,7 @@ export default function WorkoutPage() {
   const [mongoStatus, setMongoStatus] = useState({ configured: false, connected: false });
   const [showHistory, setShowHistory] = useState(false);
   const [historyList, setHistoryList] = useState([]);
+  const [showExport, setShowExport] = useState(false);
   const saveTimeoutRef = useRef(null);
 
   // Check MongoDB connection status
@@ -255,18 +415,59 @@ export default function WorkoutPage() {
             >
               {showHistory ? "Close History" : "Workout History"}
             </button>
+
+            <button
+              id="header-export-btn"
+              className="export-btn"
+              onClick={() => setShowExport(true)}
+              type="button"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                <polyline points="7 10 12 15 17 10"/>
+                <line x1="12" y1="15" x2="12" y2="3"/>
+              </svg>
+              Export
+            </button>
           </div>
         </div>
       </header>
+
+      {/* Export Modal */}
+      {showExport && (
+        <ExportModal
+          onClose={() => setShowExport(false)}
+          currentSession={{ date: selectedDate, day: selectedDay, items }}
+          historyList={historyList}
+          program={PROGRAM}
+        />
+      )}
 
       {/* History Drawer / Panel */}
       {showHistory && (
         <section className="history-panel">
           <div className="history-panel-header">
             <h3>Logged Workout History</h3>
-            <span style={{ fontSize: "0.82rem", color: "var(--text-muted)" }}>
-              {historyList.length} past sessions recorded
-            </span>
+            <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+              <span style={{ fontSize: "0.82rem", color: "var(--text-muted)" }}>
+                {historyList.length} past sessions recorded
+              </span>
+              {historyList.length > 0 && (
+                <button
+                  id="history-export-btn"
+                  className="export-btn"
+                  onClick={() => setShowExport(true)}
+                  type="button"
+                >
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                    <polyline points="7 10 12 15 17 10"/>
+                    <line x1="12" y1="15" x2="12" y2="3"/>
+                  </svg>
+                  Export
+                </button>
+              )}
+            </div>
           </div>
           {historyList.length === 0 ? (
             <p style={{ margin: 0, color: "var(--text-muted)", fontSize: "0.88rem" }}>
