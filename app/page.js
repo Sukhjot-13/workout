@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import { PROGRAM } from "@/lib/program";
+import { PROGRAM, hasSessionData } from "@/lib/program";
 
 const STORAGE_KEY = "workout_tracker_local_cache";
 
@@ -48,12 +48,9 @@ export default function WorkoutPage() {
     // 1. Instant load from local storage
     let localItems = {};
     try {
-      const cached = localStorage.getItem(STORAGE_KEY);
-      if (cached) {
-        const parsed = JSON.parse(cached);
-        if (parsed && parsed[sessionKey]) {
-          localItems = parsed[sessionKey];
-        }
+      const cached = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
+      if (cached && cached[sessionKey]) {
+        localItems = cached[sessionKey];
       }
     } catch (e) {
       console.warn("Error reading localStorage:", e);
@@ -70,7 +67,7 @@ export default function WorkoutPage() {
           if (data.mongoConnected) {
             setMongoStatus((prev) => ({ ...prev, connected: true, configured: true }));
           }
-          if (data.items && Object.keys(data.items).length > 0) {
+          if (data.items && hasSessionData(data.items)) {
             setItems(data.items);
             // Update local cache
             try {
@@ -78,6 +75,15 @@ export default function WorkoutPage() {
               cached[sessionKey] = data.items;
               localStorage.setItem(STORAGE_KEY, JSON.stringify(cached));
             } catch (err) {}
+          } else {
+            // Server has no active session or it was cleared
+            if (!hasSessionData(localItems)) {
+              try {
+                const cached = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
+                delete cached[sessionKey];
+                localStorage.setItem(STORAGE_KEY, JSON.stringify(cached));
+              } catch (err) {}
+            }
           }
         }
       } catch (err) {
@@ -95,12 +101,31 @@ export default function WorkoutPage() {
   const saveSession = useCallback(
     (newItems) => {
       const sessionKey = `${selectedDate}|${selectedDay}`;
-      // Save locally immediately
+      const hasData = hasSessionData(newItems);
+
+      // Save locally immediately or delete from cache if neutral
       try {
         const cached = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
-        cached[sessionKey] = newItems;
+        if (hasData) {
+          cached[sessionKey] = newItems;
+        } else {
+          delete cached[sessionKey];
+        }
         localStorage.setItem(STORAGE_KEY, JSON.stringify(cached));
       } catch (e) {}
+
+      // Update in-memory history list immediately if history panel is open
+      setHistoryList((prev) => {
+        if (!hasData) {
+          return prev.filter((h) => !(h.date === selectedDate && h.day === selectedDay));
+        } else {
+          const exists = prev.some((h) => h.date === selectedDate && h.day === selectedDay);
+          if (!exists) {
+            return [{ date: selectedDate, day: selectedDay }, ...prev];
+          }
+          return prev;
+        }
+      });
 
       setSyncStatus("saving");
 
@@ -147,13 +172,34 @@ export default function WorkoutPage() {
 
   // Load history list
   const loadHistory = async () => {
+    let sessions = [];
+    let fetchedFromMongo = false;
     try {
       const res = await fetch("/api/history");
       if (res.ok) {
         const data = await res.json();
-        setHistoryList(data.sessions || []);
+        if (data.mongoConnected && Array.isArray(data.sessions)) {
+          sessions = data.sessions.filter((s) => hasSessionData(s.items));
+          fetchedFromMongo = true;
+        }
       }
     } catch (e) {}
+
+    // If MongoDB is not connected or local fallback, read valid sessions from localStorage
+    if (!fetchedFromMongo) {
+      try {
+        const cached = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
+        sessions = Object.entries(cached)
+          .filter(([_, sessionItems]) => hasSessionData(sessionItems))
+          .map(([key]) => {
+            const [date, day] = key.split("|");
+            return { date, day };
+          })
+          .sort((a, b) => b.date.localeCompare(a.date));
+      } catch (e) {}
+    }
+
+    setHistoryList(sessions);
   };
 
   const toggleHistory = () => {

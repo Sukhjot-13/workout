@@ -1,4 +1,5 @@
 import { getDatabase } from "@/lib/mongodb";
+import { hasSessionData } from "@/lib/program";
 
 export async function GET(request) {
   const { searchParams } = new URL(request.url);
@@ -57,6 +58,13 @@ export async function POST(request) {
         mongoConnected: false,
         message: "MONGODB_URI not configured or unreachable. Saved locally.",
       });
+    }
+
+    const hasData = hasSessionData(items);
+
+    if (!hasData) {
+      await db.collection("sessions").deleteOne({ date, day });
+      return Response.json({ success: true, deleted: true, mongoConnected: true });
     }
 
     await db.collection("sessions").updateOne(
