@@ -17,7 +17,7 @@ export default function WorkoutPage() {
   const [selectedDay, setSelectedDay] = useState("day1");
   const [selectedDate, setSelectedDate] = useState(getLocalDateString());
   const [items, setItems] = useState({});
-  const [syncStatus, setSyncStatus] = useState("synced");
+  const [syncStatus, setSyncStatus] = useState("synced"); // "synced" | "saving" | "local"
   const [mongoStatus, setMongoStatus] = useState({ configured: false, connected: false });
   const [showHistory, setShowHistory] = useState(false);
   const [historyList, setHistoryList] = useState([]);
@@ -45,6 +45,7 @@ export default function WorkoutPage() {
   // Load session when date or day changes
   useEffect(() => {
     const sessionKey = `${selectedDate}|${selectedDay}`;
+    // 1. Instant load from local storage
     let localItems = {};
     try {
       const cached = localStorage.getItem(STORAGE_KEY);
@@ -59,6 +60,7 @@ export default function WorkoutPage() {
     }
     setItems(localItems);
 
+    // 2. Fetch from API (MongoDB)
     let isMounted = true;
     async function fetchServerSession() {
       try {
@@ -70,6 +72,7 @@ export default function WorkoutPage() {
           }
           if (data.items && Object.keys(data.items).length > 0) {
             setItems(data.items);
+            // Update local cache
             try {
               const cached = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
               cached[sessionKey] = data.items;
@@ -92,6 +95,7 @@ export default function WorkoutPage() {
   const saveSession = useCallback(
     (newItems) => {
       const sessionKey = `${selectedDate}|${selectedDay}`;
+      // Save locally immediately
       try {
         const cached = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
         cached[sessionKey] = newItems;
@@ -125,11 +129,12 @@ export default function WorkoutPage() {
         } catch (err) {
           setSyncStatus("local");
         }
-      }, 400);
+      }, 500);
     },
     [selectedDate, selectedDay]
   );
 
+  // Update an item in the session
   const updateItem = (key, updater) => {
     setItems((prev) => {
       const current = prev[key] || {};
@@ -140,15 +145,20 @@ export default function WorkoutPage() {
     });
   };
 
-  const toggleHistory = async () => {
+  // Load history list
+  const loadHistory = async () => {
+    try {
+      const res = await fetch("/api/history");
+      if (res.ok) {
+        const data = await res.json();
+        setHistoryList(data.sessions || []);
+      }
+    } catch (e) {}
+  };
+
+  const toggleHistory = () => {
     if (!showHistory) {
-      try {
-        const res = await fetch("/api/history");
-        if (res.ok) {
-          const data = await res.json();
-          setHistoryList(data.sessions || []);
-        }
-      } catch (e) {}
+      loadHistory();
     }
     setShowHistory((prev) => !prev);
   };
@@ -156,70 +166,80 @@ export default function WorkoutPage() {
   const currentProgramDay = PROGRAM[selectedDay] || PROGRAM.day1;
 
   return (
-    <main className="wrap">
+    <main className="app-container">
       {/* Header */}
-      <header className="top-header">
-        <div className="top-bar">
+      <header className="app-header">
+        <div className="header-top">
           <div>
-            <h1>Lean Athletic Workout Tracker</h1>
-            <p className="intro">
+            <h1 className="app-title">Lean Athletic Workout Tracker</h1>
+            <p className="app-subtitle">
               3 mandatory gym days + an optional 4th athletic/conditioning day.
             </p>
           </div>
 
-          <div className="header-actions">
-            <div
-              className={`cloud-badge ${mongoStatus.connected ? "" : "offline"}`}
+          <div className="header-badges">
+            <span
+              className={`status-badge ${
+                mongoStatus.connected
+                  ? "connected"
+                  : mongoStatus.configured
+                  ? "saving"
+                  : "local"
+              }`}
               title={
                 mongoStatus.connected
                   ? "Connected to MongoDB"
-                  : "Using local storage. Connect MongoDB in .env for cloud sync."
+                  : mongoStatus.configured
+                  ? "Connecting to MongoDB..."
+                  : "Using local storage. Add MONGODB_URI to .env to enable cloud sync."
               }
             >
-              <span className="cloud-dot"></span>
-              {mongoStatus.connected ? "MongoDB Synced" : "Local Storage"}
-            </div>
+              <span className="status-dot"></span>
+              {mongoStatus.connected
+                ? "MongoDB Connected"
+                : mongoStatus.configured
+                ? "Connecting..."
+                : "Local Storage (Paste Mongo URL in .env)"}
+            </span>
 
             <button
-              className="history-btn"
+              className="history-toggle-btn"
               onClick={toggleHistory}
               type="button"
             >
-              {showHistory ? "✕ Close Log" : "📜 History"}
+              {showHistory ? "Close History" : "Workout History"}
             </button>
           </div>
         </div>
       </header>
 
-      {/* History Drawer */}
+      {/* History Drawer / Panel */}
       {showHistory && (
-        <section className="history-drawer">
-          <div className="history-drawer-head">
-            <h3>Logged Workout Sessions</h3>
-            <span style={{ fontSize: "0.82rem", color: "var(--muted)" }}>
-              {historyList.length} session{historyList.length === 1 ? "" : "s"} found
+        <section className="history-panel">
+          <div className="history-panel-header">
+            <h3>Logged Workout History</h3>
+            <span style={{ fontSize: "0.82rem", color: "var(--text-muted)" }}>
+              {historyList.length} past sessions recorded
             </span>
           </div>
-
           {historyList.length === 0 ? (
-            <p style={{ margin: 0, color: "var(--muted)", fontSize: "0.88rem" }}>
-              No previous workouts saved to cloud yet. Complete your first session to view it here!
+            <p style={{ margin: 0, color: "var(--text-muted)", fontSize: "0.88rem" }}>
+              No previous workouts saved yet. As you log sets, they will appear here.
             </p>
           ) : (
-            <div className="history-grid">
+            <div className="history-list">
               {historyList.map((h, idx) => (
                 <button
                   key={idx}
-                  className="history-card-btn"
+                  className="history-item-btn"
                   onClick={() => {
                     setSelectedDate(h.date);
                     setSelectedDay(h.day);
                     setShowHistory(false);
-                    window.scrollTo({ top: 0, behavior: "smooth" });
                   }}
                 >
-                  <span className="history-date">{h.date}</span>
-                  <span className="history-day-title">
+                  <span className="history-item-date">{h.date}</span>
+                  <span className="history-item-day">
                     {PROGRAM[h.day]?.title || h.day}
                   </span>
                 </button>
@@ -229,12 +249,15 @@ export default function WorkoutPage() {
         </section>
       )}
 
-      {/* Controls Bar */}
-      <section className="controls" aria-label="Workout selection controls">
-        <div className="field">
-          <label htmlFor="daySelect">Workout day</label>
+      {/* Sticky Day & Date Controls */}
+      <section className="controls-bar" aria-label="Workout selection controls">
+        <div className="control-field">
+          <label className="control-label" htmlFor="day-select">
+            Workout Day
+          </label>
           <select
-            id="daySelect"
+            id="day-select"
+            className="control-select"
             value={selectedDay}
             onChange={(e) => {
               setSelectedDay(e.target.value);
@@ -250,53 +273,62 @@ export default function WorkoutPage() {
           </select>
         </div>
 
-        <div className="field">
-          <label htmlFor="dateInput">Date</label>
+        <div className="control-field">
+          <label className="control-label" htmlFor="date-select">
+            Date
+          </label>
           <input
-            id="dateInput"
+            id="date-select"
             type="date"
+            className="control-input"
             value={selectedDate}
             onChange={(e) => setSelectedDate(e.target.value || getLocalDateString())}
           />
         </div>
 
-        <div className={`save-pill ${syncStatus === "saving" ? "saving" : ""}`}>
-          {syncStatus === "saving" ? "Saving..." : "✓ Auto-saved"}
+        <div
+          className={`sync-indicator ${
+            syncStatus === "saving" ? "saving" : "synced"
+          }`}
+        >
+          {syncStatus === "saving" ? "Saving..." : "✓ Saved"}
         </div>
       </section>
 
-      {/* Day Heading */}
-      <div className="day-head">
-        <h2>{currentProgramDay.title}</h2>
-        <p>{currentProgramDay.subtitle}</p>
+      {/* Day Title */}
+      <div className="day-info-card">
+        <h2 className="day-info-title">{currentProgramDay.title}</h2>
+        <p className="day-info-subtitle">{currentProgramDay.subtitle}</p>
       </div>
 
-      {/* Sections */}
+      {/* Workout Sections */}
       {currentProgramDay.sections.map((section, sIdx) => (
-        <section key={sIdx} className="section">
-          <div className="section-title">
+        <section key={sIdx} className="workout-section">
+          <div className="section-header">
             <h3>{section.title}</h3>
-            {section.hint && <span>{section.hint}</span>}
+            {section.hint && <span className="section-hint">{section.hint}</span>}
           </div>
 
-          <div className="items">
+          <div className="section-items">
             {section.items.map((item, iIdx) => {
               const key = `${sIdx}:${iIdx}`;
               const saved = items[key] || {};
 
               return (
-                <div key={key} className="exercise">
-                  <div className="exercise-head">
+                <div key={key} className="exercise-box">
+                  <div className="exercise-info">
                     <div className="exercise-name">{item.name}</div>
                     {item.prescription && (
-                      <div className="prescription">{item.prescription}</div>
+                      <div className="exercise-prescription">
+                        {item.prescription}
+                      </div>
                     )}
-                    {item.note && <div className="note">{item.note}</div>}
+                    {item.note && <div className="exercise-note">{item.note}</div>}
                   </div>
 
-                  {/* Simple Track */}
+                  {/* Simple completion check (warmups / mobility) */}
                   {item.kind === "simple" && (
-                    <label className="simple-track">
+                    <label className="simple-check-row">
                       <input
                         type="checkbox"
                         checked={!!saved.done}
@@ -305,18 +337,18 @@ export default function WorkoutPage() {
                           updateItem(key, (it) => ({ ...it, done: checked }));
                         }}
                       />
-                      <span>Complete</span>
+                      <span className="simple-check-label">Complete</span>
                     </label>
                   )}
 
-                  {/* Sets Table */}
+                  {/* Sets table */}
                   {item.kind === "sets" && (
-                    <div className="set-table">
-                      <div className="set-head">
-                        <div>Set</div>
+                    <div className="sets-container">
+                      <div className="sets-header-row">
+                        <div style={{ textAlign: "center" }}>Set</div>
                         <div>Weight</div>
-                        <div>Reps / time / distance</div>
-                        <div>Done</div>
+                        <div>Reps / Target</div>
+                        <div style={{ textAlign: "center" }}>Done</div>
                       </div>
 
                       {Array.from({ length: item.setCount }, (_, n) => n + 1).map(
@@ -326,10 +358,11 @@ export default function WorkoutPage() {
                           const disableWeight = item.track === "reps";
 
                           return (
-                            <div key={setNum} className="set-row">
-                              <div className="set-no">{setNum}</div>
+                            <div key={setNum} className="set-entry-row">
+                              <div className="set-number">{setNum}</div>
                               <input
                                 type="text"
+                                className="set-input"
                                 placeholder={disableWeight ? "—" : "Weight"}
                                 disabled={disableWeight}
                                 value={setData.weight || ""}
@@ -347,6 +380,7 @@ export default function WorkoutPage() {
                               />
                               <input
                                 type="text"
+                                className="set-input"
                                 placeholder={item.target || "Reps"}
                                 value={setData.reps || ""}
                                 onChange={(e) => {
@@ -363,6 +397,7 @@ export default function WorkoutPage() {
                               />
                               <input
                                 type="checkbox"
+                                className="set-checkbox"
                                 checked={!!setData.done}
                                 onChange={(e) => {
                                   const checked = e.target.checked;
@@ -383,13 +418,14 @@ export default function WorkoutPage() {
                     </div>
                   )}
 
-                  {/* Result Grid (Cardio) */}
+                  {/* Result / Cardio */}
                   {item.kind === "result" && (
-                    <div className="result-grid">
-                      <div>
-                        <span className="mini">{item.label1}</span>
+                    <div className="result-container">
+                      <div className="result-field">
+                        <span className="result-field-label">{item.label1}</span>
                         <input
                           type="text"
+                          className="set-input"
                           value={saved.value1 || ""}
                           placeholder="e.g. Incline Walk 25m"
                           onChange={(e) => {
@@ -398,10 +434,11 @@ export default function WorkoutPage() {
                           }}
                         />
                       </div>
-                      <div>
-                        <span className="mini">{item.label2}</span>
+                      <div className="result-field">
+                        <span className="result-field-label">{item.label2}</span>
                         <input
                           type="text"
+                          className="set-input"
                           value={saved.value2 || ""}
                           placeholder="Notes"
                           onChange={(e) => {
@@ -412,6 +449,7 @@ export default function WorkoutPage() {
                       </div>
                       <input
                         type="checkbox"
+                        className="result-checkbox"
                         checked={!!saved.done}
                         onChange={(e) => {
                           const checked = e.target.checked;
@@ -427,11 +465,63 @@ export default function WorkoutPage() {
         </section>
       ))}
 
-      {/* Guidelines Reference Accordion */}
-      <section className="reference" aria-label="Reference rules">
+      {/* Program Guidelines / Reference */}
+      <section className="reference-section" aria-label="Reference rules">
+        <details>
+          <summary>Weekly Layout & Schedule</summary>
+          <div className="reference-content">
+            <div className="ref-table-wrap">
+              <table className="ref-table">
+                <thead>
+                  <tr>
+                    <th>Day</th>
+                    <th>Training Session</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td><strong>Monday</strong></td>
+                    <td><strong>Day 1 — Full Body A: Squat + Upper Body Foundation</strong></td>
+                  </tr>
+                  <tr>
+                    <td>Tuesday</td>
+                    <td>Walking / light cardio / mobility</td>
+                  </tr>
+                  <tr>
+                    <td><strong>Wednesday</strong></td>
+                    <td><strong>Day 2 — Full Body B: Posterior Chain + Unilateral</strong></td>
+                  </tr>
+                  <tr>
+                    <td>Thursday</td>
+                    <td>Walking / light cardio / mobility</td>
+                  </tr>
+                  <tr>
+                    <td><strong>Friday</strong></td>
+                    <td><strong>Day 3 — Full Body C: Complete Physique + Athletic Strength</strong></td>
+                  </tr>
+                  <tr>
+                    <td><strong>Saturday</strong></td>
+                    <td><strong>Optional Day 4 — Athletic conditioning + mobility</strong></td>
+                  </tr>
+                  <tr>
+                    <td>Sunday</td>
+                    <td>Rest / easy walking</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <p>
+              You can move the days around. Ideally keep <strong>at least one day between the three main lifting sessions</strong>.
+            </p>
+          </div>
+        </details>
+
         <details>
           <summary>First 4 Weeks — Return-to-Gym Rule</summary>
-          <div className="reference-body">
+          <div className="reference-content">
+            <div className="ref-alert-box">
+              Because you're coming back after 5–7 months, don't immediately perform the full volume.
+            </div>
             <p>
               <strong>Weeks 1–2:</strong> Perform 2 working sets of almost every
               exercise. Keep about 3–4 reps in reserve. No failure training.
@@ -439,103 +529,200 @@ export default function WorkoutPage() {
             </p>
             <p>
               <strong>Weeks 3–4:</strong> Move the important exercises to the
-              sets listed below. Keep 2–3 reps in reserve. Introduce the light
+              sets listed in the workout. Keep 2–3 reps in reserve. Introduce the light
               athletic/power work.
             </p>
             <p>
               <strong>Week 5 onward:</strong> Run the full program. Most sets
-              should finish with around 1–3 good reps still possible. You do not
-              need to train to failure to make progress.
+              should finish with around 1–3 good reps still possible. You do not need
+              to train to failure to make progress.
             </p>
           </div>
         </details>
 
         <details>
           <summary>Off Days</summary>
-          <div className="reference-body">
+          <div className="reference-content">
             <p>
-              I don’t want complete inactivity except where you’re genuinely
-              tired. Easy walking is beneficial.
+              Aim for healthy recovery without complete inactivity (except where you're genuinely tired). Easy walking is beneficial.
             </p>
             <p>
-              A simple target: 20–40 minute walk, plus optionally cat-cow × 8,
-              wall slides × 10, hip-flexor stretch, pec stretch, ankle mobility.
-              About 5–10 minutes total.
+              <strong>Daily Target:</strong> 20–40 minute walk, plus optionally:
             </p>
+            <ul>
+              <li>Cat-cow &times; 8</li>
+              <li>Wall slides &times; 10</li>
+              <li>Kneeling hip-flexor stretch</li>
+              <li>Doorway pec stretch</li>
+              <li>Ankle mobility</li>
+            </ul>
+            <p>About 5–10 minutes total for mobility.</p>
           </div>
         </details>
 
         <details>
           <summary>Cardio Goal</summary>
-          <div className="reference-body">
+          <div className="reference-content">
             <p>
-              Eventually aim to accumulate roughly 150+ minutes of moderate
-              aerobic activity per week, which is consistent with standard adult
+              Eventually aim to accumulate roughly <strong>150+ minutes of moderate
+              aerobic activity per week</strong>, consistent with standard adult
               cardiovascular exercise recommendations.
             </p>
             <p>
-              Your gym cardio + walks can easily accomplish this. You do not
-              have to run. Walking, incline walking, cycling, elliptical and
-              rowing all count.
+              Your gym cardio + walks can easily accomplish this. You do <strong>not</strong> have
+              to run. Walking, incline walking, cycling, elliptical, and rowing all count.
             </p>
           </div>
         </details>
 
         <details>
-          <summary>Posture + Decompression</summary>
-          <div className="reference-body">
+          <summary>Posture + Decompression Routine</summary>
+          <div className="reference-content">
             <p>
-              <strong>3–5 days/week:</strong> Dead hang — 2–3 × 20–45 sec; Wall
-              slides — 1–2 × 10; Chin tucks — 1–2 × 10–15; Hip-flexor stretch —
-              30–45 sec/side; Pec stretch — 30 sec/side; Thoracic extension —
-              8–10 reps.
+              Perform this <strong>3–5 days/week</strong> to stand tall, decompress the spine, and maintain thoracic openness:
             </p>
+            <ul>
+              <li><strong>Dead hang:</strong> 2–3 &times; 20–45 sec (do not hang painfully or force range)</li>
+              <li><strong>Wall slides:</strong> 1–2 &times; 10</li>
+              <li><strong>Chin tucks:</strong> 1–2 &times; 10–15</li>
+              <li><strong>Hip-flexor stretch:</strong> 30–45 sec/side</li>
+              <li><strong>Pec stretch:</strong> 30 sec/side</li>
+              <li><strong>Thoracic extension:</strong> 8–10 reps</li>
+            </ul>
             <p>
-              Your strength training already contributes substantially through
-              rows, face pulls, Y-raises, serratus work, lower traps, rear
-              delts, rotator cuff, core and glutes.
+              Your strength training already contributes substantially through rows, face pulls, Y-raises, serratus work, lower traps, rear delts, rotator cuff, core, and glutes. Hanging and posture work help you stand naturally upright and temporarily decompress your spine.
             </p>
           </div>
         </details>
 
         <details>
           <summary>How to Progress (Double Progression)</summary>
-          <div className="reference-body">
+          <div className="reference-content">
             <p>
-              Suppose an exercise says 3 × 8–12. Start with a weight you can
-              perform for something like 10 / 9 / 8 with clean technique. Over
-              the following workouts perhaps 11 / 10 / 9, then 12 / 11 / 10,
-              eventually 12 / 12 / 12.
+              Suppose an exercise says <strong>3 &times; 8–12</strong>:
             </p>
-            <p>
-              Once you hit the top of the range with good form, increase the
-              weight slightly and work your way back up. That’s double
-              progression.
-            </p>
+            <ol>
+              <li>Start with a weight you can perform for <strong>10 / 9 / 8</strong> with clean technique.</li>
+              <li>Over following workouts aim for <strong>11 / 10 / 9</strong>, then <strong>12 / 11 / 10</strong>.</li>
+              <li>Eventually reach the top of the rep target: <strong>12 / 12 / 12</strong>.</li>
+              <li>Once you reach the top of the range with good form across all sets, increase the weight slightly and work your way back up.</li>
+            </ol>
+            <p>That is double progression—simple, safe, and effective.</p>
           </div>
         </details>
 
         <details>
           <summary>Rest Times</summary>
-          <div className="reference-body">
+          <div className="reference-content">
             <p>
-              <strong>Big exercises:</strong> Squats, RDL, presses, rows,
-              pulldowns, hip thrusts, leg press — approximately 2–3 minutes.
+              <strong>Big exercises (2–3 minutes):</strong> Squats, RDL, dumbbell presses, rows,
+              pulldowns, hip thrusts, leg press.
             </p>
             <p>
-              <strong>Smaller exercises:</strong> Curls, triceps, lateral
-              raises, cuff work, calves, forearms — 60–90 seconds.
+              <strong>Smaller exercises (60–90 seconds):</strong> Curls, triceps, lateral
+              raises, cuff work, calves, forearms.
             </p>
             <p>
-              <strong>Athletic work:</strong> Rest enough for the next set to
-              remain explosive.
+              <strong>Athletic work:</strong> Rest enough for the next set to remain explosive.
             </p>
+          </div>
+        </details>
+
+        <details>
+          <summary>Complete Body Audit (56 Functions) & Replacement Rule</summary>
+          <div className="reference-content">
+            <div className="ref-alert-box">
+              <strong>The Golden Rule:</strong> If you ever dislike an exercise, don't just delete it. Replace it with an exercise that preserves <strong>exactly the same muscle and function</strong>. That way you maintain complete full-body coverage without creating holes in the plan.
+            </div>
+            <div className="ref-table-wrap">
+              <table className="ref-table">
+                <thead>
+                  <tr>
+                    <th>Region / Function</th>
+                    <th style={{ textAlign: "center", width: "120px" }}>Covered</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {[
+                    "Upper chest",
+                    "Mid/general chest",
+                    "Lower/sternal chest",
+                    "Serratus anterior",
+                    "Front delts",
+                    "Side delts",
+                    "Rear delts",
+                    "Rotator cuff",
+                    "Scapular stabilizers",
+                    "Upper traps",
+                    "Middle traps",
+                    "Lower traps",
+                    "Rhomboids",
+                    "Lats",
+                    "Teres major",
+                    "Spinal erectors",
+                    "Biceps",
+                    "Brachialis",
+                    "Brachioradialis",
+                    "All triceps heads",
+                    "Forearm flexors",
+                    "Forearm extensors",
+                    "Pronation/supination",
+                    "Grip",
+                    "Rectus abs",
+                    "Deep core",
+                    "Obliques",
+                    "Anti-extension",
+                    "Anti-rotation",
+                    "Anti-lateral flexion",
+                    "Glute max",
+                    "Glute medius",
+                    "Glute minimus",
+                    "Quads",
+                    "Hamstring hip extension",
+                    "Hamstring knee flexion",
+                    "Adductors",
+                    "Abductors",
+                    "Hip flexors",
+                    "Gastrocnemius",
+                    "Soleus",
+                    "Tibialis anterior",
+                    "Ankle inversion",
+                    "Ankle eversion",
+                    "Foot/arch muscles",
+                    "Neck flexion",
+                    "Neck extension",
+                    "Neck lateral flexion",
+                    "Neck rotation",
+                    "Balance",
+                    "Unilateral strength",
+                    "Grip/carries",
+                    "Explosive power",
+                    "Lateral movement",
+                    "Coordination",
+                    "Aerobic conditioning",
+                    "Higher-intensity conditioning",
+                    "Flexibility",
+                    "Mobility",
+                    "Posture",
+                    "Spinal decompression",
+                  ].map((item, idx) => (
+                    <tr key={idx}>
+                      <td>{item}</td>
+                      <td style={{ textAlign: "center", color: "var(--accent)", fontWeight: 700 }}>
+                        {item === "Higher-intensity conditioning" ? "✅ Optional" : "✅"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
         </details>
       </section>
 
-      <footer className="footer">
-        All entries are automatically synchronized to MongoDB and stored locally on this device.
+      <footer className="app-footer">
+        Personal Workout Tracker &bull; Changes are automatically saved to your
+        device and synchronized to MongoDB.
       </footer>
     </main>
   );
