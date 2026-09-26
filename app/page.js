@@ -172,6 +172,23 @@ function getLocalDateString() {
   return `${y}-${m}-${day}`;
 }
 
+function getDefaultReps(target) {
+  if (!target) return "10";
+  // Matches "8–12" or "8-12" or "10–15" or "12–20"
+  const rangeMatch = target.match(/(\d+)\s*[–-]\s*(\d+)/);
+  if (rangeMatch) {
+    const min = parseInt(rangeMatch[1], 10);
+    const max = parseInt(rangeMatch[2], 10);
+    return String(Math.round((min + max) / 2));
+  }
+  // Single number like "5"
+  const singleMatch = target.match(/\d+/);
+  if (singleMatch) {
+    return singleMatch[0];
+  }
+  return "10";
+}
+
 export default function WorkoutPage() {
   const [selectedDay, setSelectedDay] = useState("day1");
   const [selectedDate, setSelectedDate] = useState(getLocalDateString());
@@ -371,6 +388,40 @@ export default function WorkoutPage() {
 
   const currentProgramDay = PROGRAM[selectedDay] || PROGRAM.day1;
 
+  // Session progress calculation
+  const totalSetsInDay = currentProgramDay.sections.reduce((acc, sec) => {
+    return (
+      acc +
+      sec.items.reduce((sAcc, item) => {
+        if (item.kind === "sets") return sAcc + (item.setCount || 0);
+        if (item.kind === "simple" || item.kind === "result") return sAcc + 1;
+        return sAcc;
+      }, 0)
+    );
+  }, 0);
+
+  const completedSetsInDay = currentProgramDay.sections.reduce((acc, sec, sIdx) => {
+    return (
+      acc +
+      sec.items.reduce((sAcc, item, iIdx) => {
+        const key = `${sIdx}:${iIdx}`;
+        const saved = items[key] || {};
+        if (item.kind === "sets") {
+          const doneCount = Object.values(saved.sets || {}).filter((s) => s.done).length;
+          return sAcc + doneCount;
+        }
+        if ((item.kind === "simple" || item.kind === "result") && saved.done) {
+          return sAcc + 1;
+        }
+        return sAcc;
+      }, 0)
+    );
+  }, 0);
+
+  const progressPercent = totalSetsInDay > 0
+    ? Math.round((completedSetsInDay / totalSetsInDay) * 100)
+    : 0;
+
   return (
     <main className="app-container">
       {/* Header */}
@@ -496,6 +547,31 @@ export default function WorkoutPage() {
         </section>
       )}
 
+      {/* Quick Day Switcher Tabs */}
+      <nav className="day-tabs-bar" role="tablist" aria-label="Workout Days">
+        {[
+          { id: "day1", label: "Day 1", name: "Full Body A" },
+          { id: "day2", label: "Day 2", name: "Full Body B" },
+          { id: "day3", label: "Day 3", name: "Full Body C" },
+          { id: "day4", label: "Day 4", name: "Athletic / Cond" },
+        ].map((d) => (
+          <button
+            key={d.id}
+            type="button"
+            role="tab"
+            aria-selected={selectedDay === d.id}
+            className={`day-tab-btn ${selectedDay === d.id ? "active" : ""}`}
+            onClick={() => {
+              setSelectedDay(d.id);
+              window.scrollTo({ top: 0, behavior: "smooth" });
+            }}
+          >
+            <span className="day-tab-label">{d.label}</span>
+            <span className="day-tab-name">{d.name}</span>
+          </button>
+        ))}
+      </nav>
+
       {/* Sticky Day & Date Controls */}
       <section className="controls-bar" aria-label="Workout selection controls">
         <div className="control-field">
@@ -542,10 +618,26 @@ export default function WorkoutPage() {
         </div>
       </section>
 
-      {/* Day Title */}
+      {/* Day Title & Progress Card */}
       <div className="day-info-card">
-        <h2 className="day-info-title">{currentProgramDay.title}</h2>
-        <p className="day-info-subtitle">{currentProgramDay.subtitle}</p>
+        <div className="day-info-main">
+          <h2 className="day-info-title">{currentProgramDay.title}</h2>
+          <p className="day-info-subtitle">{currentProgramDay.subtitle}</p>
+        </div>
+        <div className="day-progress-wrap">
+          <div className="day-progress-header">
+            <span className="day-progress-label">Today's Progress</span>
+            <span className="day-progress-stat">
+              <strong>{completedSetsInDay}</strong> / {totalSetsInDay} completed ({progressPercent}%)
+            </span>
+          </div>
+          <div className="day-progress-track">
+            <div
+              className={`day-progress-bar ${progressPercent === 100 ? "all-done" : ""}`}
+              style={{ width: `${progressPercent}%` }}
+            />
+          </div>
+        </div>
       </div>
 
       {/* Workout Sections */}
@@ -575,99 +667,245 @@ export default function WorkoutPage() {
 
                   {/* Simple completion check (warmups / mobility) */}
                   {item.kind === "simple" && (
-                    <label className="simple-check-row">
-                      <input
-                        type="checkbox"
-                        checked={!!saved.done}
-                        onChange={(e) => {
-                          const checked = e.target.checked;
-                          updateItem(key, (it) => ({ ...it, done: checked }));
+                    <div
+                      className={`simple-check-row ${saved.done ? "is-done" : ""}`}
+                      onClick={() => {
+                        const nextDone = !saved.done;
+                        updateItem(key, (it) => ({ ...it, done: nextDone }));
+                      }}
+                    >
+                      <button
+                        type="button"
+                        className={`set-done-btn ${saved.done ? "is-done" : ""}`}
+                        aria-label={`Mark ${item.name} ${saved.done ? "incomplete" : "complete"}`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          const nextDone = !saved.done;
+                          updateItem(key, (it) => ({ ...it, done: nextDone }));
                         }}
-                      />
-                      <span className="simple-check-label">Complete</span>
-                    </label>
-                  )}
-
-                  {/* Sets table */}
-                  {item.kind === "sets" && (
-                    <div className="sets-container">
-                      <div className="sets-header-row">
-                        <div style={{ textAlign: "center" }}>Set</div>
-                        <div>Weight</div>
-                        <div>Reps / Target</div>
-                        <div style={{ textAlign: "center" }}>Done</div>
-                      </div>
-
-                      {Array.from({ length: item.setCount }, (_, n) => n + 1).map(
-                        (setNum) => {
-                          const setKey = String(setNum);
-                          const setData = (saved.sets || {})[setKey] || {};
-                          const disableWeight = item.track === "reps";
-
-                          return (
-                            <div key={setNum} className="set-entry-row">
-                              <div className="set-number">{setNum}</div>
-                              <input
-                                type="text"
-                                className="set-input"
-                                placeholder={disableWeight ? "—" : "Weight"}
-                                disabled={disableWeight}
-                                value={setData.weight || ""}
-                                onChange={(e) => {
-                                  const val = e.target.value;
-                                  updateItem(key, (it) => {
-                                    const nextSets = { ...(it.sets || {}) };
-                                    nextSets[setKey] = {
-                                      ...(nextSets[setKey] || {}),
-                                      weight: val,
-                                    };
-                                    return { ...it, sets: nextSets };
-                                  });
-                                }}
-                              />
-                              <input
-                                type="text"
-                                className="set-input"
-                                placeholder={item.target || "Reps"}
-                                value={setData.reps || ""}
-                                onChange={(e) => {
-                                  const val = e.target.value;
-                                  updateItem(key, (it) => {
-                                    const nextSets = { ...(it.sets || {}) };
-                                    nextSets[setKey] = {
-                                      ...(nextSets[setKey] || {}),
-                                      reps: val,
-                                    };
-                                    return { ...it, sets: nextSets };
-                                  });
-                                }}
-                              />
-                              <input
-                                type="checkbox"
-                                className="set-checkbox"
-                                checked={!!setData.done}
-                                onChange={(e) => {
-                                  const checked = e.target.checked;
-                                  updateItem(key, (it) => {
-                                    const nextSets = { ...(it.sets || {}) };
-                                    nextSets[setKey] = {
-                                      ...(nextSets[setKey] || {}),
-                                      done: checked,
-                                    };
-                                    return { ...it, sets: nextSets };
-                                  });
-                                }}
-                              />
-                            </div>
-                          );
-                        }
-                      )}
+                      >
+                        {saved.done ? (
+                          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                            <polyline points="20 6 9 17 4 12" />
+                          </svg>
+                        ) : (
+                          <span className="set-done-circle" />
+                        )}
+                      </button>
+                      <span className="simple-check-label">
+                        {saved.done ? "✓ Completed" : "Mark as completed"}
+                      </span>
                     </div>
                   )}
 
+                  {/* Sets table */}
+                  {item.kind === "sets" && (() => {
+                    const defaultReps = getDefaultReps(item.target);
+
+                    const handleWeightChange = (setNum, val) => {
+                      updateItem(key, (it) => {
+                        const nextSets = { ...(it.sets || {}) };
+                        const setKey = String(setNum);
+                        const oldWeight = nextSets[setKey]?.weight || "";
+
+                        nextSets[setKey] = {
+                          ...(nextSets[setKey] || {}),
+                          weight: val,
+                        };
+
+                        // When weight is entered, populate default reps if reps is empty
+                        if (val.trim() !== "" && (!nextSets[setKey].reps || nextSets[setKey].reps.trim() === "")) {
+                          nextSets[setKey].reps = defaultReps;
+                        }
+
+                        // If editing Set 1 and exercise has multiple sets:
+                        // Copy weight to subsequent sets if they are empty or matched old Set 1 weight
+                        if (setNum === 1 && item.setCount > 1) {
+                          for (let s = 2; s <= item.setCount; s++) {
+                            const sKey = String(s);
+                            const curSet = nextSets[sKey] || {};
+                            const curWeight = curSet.weight || "";
+                            if (curWeight === "" || curWeight === oldWeight) {
+                              nextSets[sKey] = {
+                                ...curSet,
+                                weight: val,
+                              };
+                              if (val.trim() !== "" && (!nextSets[sKey].reps || nextSets[sKey].reps.trim() === "")) {
+                                nextSets[sKey].reps = defaultReps;
+                              }
+                            }
+                          }
+                        }
+
+                        return { ...it, sets: nextSets };
+                      });
+                    };
+
+                    const handleRepsChange = (setNum, val) => {
+                      updateItem(key, (it) => {
+                        const nextSets = { ...(it.sets || {}) };
+                        const setKey = String(setNum);
+                        nextSets[setKey] = {
+                          ...(nextSets[setKey] || {}),
+                          reps: val,
+                        };
+                        return { ...it, sets: nextSets };
+                      });
+                    };
+
+                    const handleStepReps = (setNum, delta) => {
+                      updateItem(key, (it) => {
+                        const nextSets = { ...(it.sets || {}) };
+                        const setKey = String(setNum);
+                        const curReps = nextSets[setKey]?.reps;
+                        let baseVal;
+                        if (curReps !== undefined && curReps !== null && String(curReps).trim() !== "") {
+                          const parsed = parseInt(String(curReps).trim(), 10);
+                          baseVal = isNaN(parsed) ? parseInt(defaultReps, 10) : parsed;
+                        } else {
+                          baseVal = parseInt(defaultReps, 10);
+                        }
+                        const nextVal = Math.max(0, baseVal + delta);
+                        nextSets[setKey] = {
+                          ...(nextSets[setKey] || {}),
+                          reps: String(nextVal),
+                        };
+                        return { ...it, sets: nextSets };
+                      });
+                    };
+
+                    const handleDoneToggle = (setNum, checked) => {
+                      updateItem(key, (it) => {
+                        const nextSets = { ...(it.sets || {}) };
+                        const setKey = String(setNum);
+
+                        nextSets[setKey] = {
+                          ...(nextSets[setKey] || {}),
+                          done: checked,
+                        };
+
+                        // If marked done, auto-check all preceding sets (1 .. setNum - 1) if not already done
+                        if (checked && setNum > 1) {
+                          for (let s = 1; s < setNum; s++) {
+                            const prevKey = String(s);
+                            const prevSet = nextSets[prevKey] || {};
+                            if (!prevSet.done) {
+                              nextSets[prevKey] = {
+                                ...prevSet,
+                                done: true,
+                              };
+                            }
+                          }
+                        }
+
+                        return { ...it, sets: nextSets };
+                      });
+                    };
+
+                    return (
+                      <div className="sets-container">
+                        <div className="sets-header-row">
+                          <div style={{ textAlign: "center" }}>Set</div>
+                          <div>Weight</div>
+                          <div className="reps-header-cell">
+                            <span>Reps</span>
+                            {item.target && (
+                              <span className="target-pill" title={`Target range: ${item.target} reps`}>
+                                ({item.target})
+                              </span>
+                            )}
+                          </div>
+                          <div style={{ textAlign: "center" }}>Done</div>
+                        </div>
+
+                        {Array.from({ length: item.setCount }, (_, n) => n + 1).map(
+                          (setNum) => {
+                            const setKey = String(setNum);
+                            const setData = (saved.sets || {})[setKey] || {};
+                            const disableWeight = item.track === "reps";
+                            const isDone = !!setData.done;
+
+                            return (
+                              <div
+                                key={setNum}
+                                className={`set-entry-row ${isDone ? "is-done" : ""}`}
+                              >
+                                <div className={`set-number ${isDone ? "is-done" : ""}`}>
+                                  {isDone ? "✓" : setNum}
+                                </div>
+
+                                <div className="set-input-wrap weight-wrap">
+                                  <input
+                                    type="text"
+                                    inputMode="decimal"
+                                    className="set-input weight-input"
+                                    placeholder={disableWeight ? "—" : "kg"}
+                                    disabled={disableWeight}
+                                    value={setData.weight || ""}
+                                    onChange={(e) => handleWeightChange(setNum, e.target.value)}
+                                  />
+                                </div>
+
+                                <div className="reps-stepper">
+                                  <button
+                                    type="button"
+                                    className="stepper-btn minus"
+                                    aria-label={`Decrease reps for set ${setNum}`}
+                                    onClick={() => handleStepReps(setNum, -1)}
+                                    title="-1 rep"
+                                  >
+                                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                                      <line x1="5" y1="12" x2="19" y2="12" />
+                                    </svg>
+                                  </button>
+                                  <input
+                                    type="text"
+                                    inputMode="numeric"
+                                    pattern="[0-9]*"
+                                    className="set-input reps-input"
+                                    placeholder={item.target || "Reps"}
+                                    value={setData.reps || ""}
+                                    onChange={(e) => handleRepsChange(setNum, e.target.value)}
+                                  />
+                                  <button
+                                    type="button"
+                                    className="stepper-btn plus"
+                                    aria-label={`Increase reps for set ${setNum}`}
+                                    onClick={() => handleStepReps(setNum, 1)}
+                                    title="+1 rep"
+                                  >
+                                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                                      <line x1="12" y1="5" x2="12" y2="19" />
+                                      <line x1="5" y1="12" x2="19" y2="12" />
+                                    </svg>
+                                  </button>
+                                </div>
+
+                                <button
+                                  type="button"
+                                  className={`set-done-btn ${isDone ? "is-done" : ""}`}
+                                  aria-label={`Mark set ${setNum} ${isDone ? "incomplete" : "complete"}`}
+                                  onClick={() => handleDoneToggle(setNum, !isDone)}
+                                >
+                                  {isDone ? (
+                                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                                      <polyline points="20 6 9 17 4 12" />
+                                    </svg>
+                                  ) : (
+                                    <span className="set-done-circle" />
+                                  )}
+                                </button>
+                              </div>
+                            );
+                          }
+                        )}
+                      </div>
+                    );
+                  })()}
+
                   {/* Result / Cardio */}
                   {item.kind === "result" && (
-                    <div className="result-container">
+                    <div className={`result-container ${saved.done ? "is-done" : ""}`}>
                       <div className="result-field">
                         <span className="result-field-label">{item.label1}</span>
                         <input
@@ -687,22 +925,32 @@ export default function WorkoutPage() {
                           type="text"
                           className="set-input"
                           value={saved.value2 || ""}
-                          placeholder="Notes"
+                          placeholder="Notes / speed / incline"
                           onChange={(e) => {
                             const val = e.target.value;
                             updateItem(key, (it) => ({ ...it, value2: val }));
                           }}
                         />
                       </div>
-                      <input
-                        type="checkbox"
-                        className="result-checkbox"
-                        checked={!!saved.done}
-                        onChange={(e) => {
-                          const checked = e.target.checked;
-                          updateItem(key, (it) => ({ ...it, done: checked }));
-                        }}
-                      />
+                      <div className="result-done-col">
+                        <button
+                          type="button"
+                          className={`set-done-btn ${saved.done ? "is-done" : ""}`}
+                          aria-label={`Mark completed`}
+                          onClick={() => {
+                            const nextDone = !saved.done;
+                            updateItem(key, (it) => ({ ...it, done: nextDone }));
+                          }}
+                        >
+                          {saved.done ? (
+                            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                              <polyline points="20 6 9 17 4 12" />
+                            </svg>
+                          ) : (
+                            <span className="set-done-circle" />
+                          )}
+                        </button>
+                      </div>
                     </div>
                   )}
                 </div>
