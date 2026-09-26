@@ -455,16 +455,57 @@ input, button, select, textarea {
   border-bottom: 1px solid var(--line-subtle);
 }
 
-.section-header h3 {
-  margin: 0;
-  font-size: 0.98rem;
-  font-weight: 700;
-  letter-spacing: -0.01em;
+.section-header.clickable {
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.15s ease;
 }
 
-.section-hint {
-  font-size: 0.8rem;
+.section-header.clickable:hover {
+  background: #19243a;
+}
+
+.section-header-title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+}
+
+.section-collapse-chevron {
+  display: inline-block;
+  font-size: 0.65rem;
   color: var(--text-muted);
+  transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  transform: rotate(0deg);
+}
+
+.section-collapse-chevron.collapsed {
+  transform: rotate(-90deg);
+}
+
+.section-header-badge-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.section-status-badge {
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 3px 9px;
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-muted);
+  border: 1px solid var(--line-subtle);
+  transition: all 0.2s;
+}
+
+.section-status-badge.completed {
+  background: rgba(16, 185, 129, 0.15);
+  color: var(--accent);
+  border-color: rgba(16, 185, 129, 0.3);
 }
 
 .section-items {
@@ -701,6 +742,102 @@ input, button, select, textarea {
   font-size: 0.92rem;
   color: var(--text);
   box-shadow: none !important;
+}
+
+.reps-stepper-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* Previous session ghost chip */
+.prev-ghost-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: var(--accent-blue);
+  background: rgba(56, 189, 248, 0.08);
+  border: 1px dashed rgba(56, 189, 248, 0.28);
+  border-radius: 6px;
+  padding: 2px 7px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  width: fit-content;
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  user-select: none;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.prev-ghost-chip:hover {
+  background: rgba(56, 189, 248, 0.16);
+  border-color: var(--accent-blue);
+  transform: translateY(-0.5px);
+}
+
+.prev-ghost-chip:active {
+  transform: scale(0.96);
+}
+
+.ghost-arrow {
+  font-size: 0.65rem;
+  opacity: 0.8;
+}
+
+.ghost-apply-hint {
+  font-size: 0.62rem;
+  color: var(--text-faint);
+  margin-left: 2px;
+}
+
+/* Sets Action Bar (+ Add Set, - Remove Set) */
+.sets-action-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+  padding: 4px 6px 2px;
+}
+
+.set-action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.set-action-btn.add-set-btn {
+  background: rgba(56, 189, 248, 0.08);
+  border: 1px solid rgba(56, 189, 248, 0.25);
+  color: var(--accent-blue);
+}
+
+.set-action-btn.add-set-btn:hover {
+  background: rgba(56, 189, 248, 0.16);
+  border-color: var(--accent-blue);
+}
+
+.set-action-btn.remove-set-btn {
+  background: rgba(239, 68, 68, 0.08);
+  border: 1px solid rgba(239, 68, 68, 0.22);
+  color: #f87171;
+}
+
+.set-action-btn.remove-set-btn:hover {
+  background: rgba(239, 68, 68, 0.16);
+  border-color: #ef4444;
 }
 
 /* Done Button */

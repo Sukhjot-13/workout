@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { PROGRAM, hasSessionData } from "@/lib/program";
 
 // ─── Export Utilities ────────────────────────────────────────────────────────
@@ -189,6 +189,19 @@ function getDefaultReps(target) {
   return "10";
 }
 
+function triggerHaptic(type = "light") {
+  if (typeof window === "undefined" || !window.navigator || !window.navigator.vibrate) return;
+  try {
+    if (type === "light") {
+      window.navigator.vibrate(12);
+    } else if (type === "medium") {
+      window.navigator.vibrate(26);
+    } else if (type === "success") {
+      window.navigator.vibrate([18, 40, 24]);
+    }
+  } catch (e) {}
+}
+
 export default function WorkoutPage() {
   const [selectedDay, setSelectedDay] = useState("day1");
   const [selectedDate, setSelectedDate] = useState(getLocalDateString());
@@ -198,6 +211,8 @@ export default function WorkoutPage() {
   const [showHistory, setShowHistory] = useState(false);
   const [historyList, setHistoryList] = useState([]);
   const [showExport, setShowExport] = useState(false);
+  const [allPastSessions, setAllPastSessions] = useState([]);
+  const [collapsedSections, setCollapsedSections] = useState({});
   const saveTimeoutRef = useRef(null);
 
   // Check MongoDB connection status
@@ -337,17 +352,63 @@ export default function WorkoutPage() {
   );
 
   // Update an item in the session
-  const updateItem = (key, updater) => {
+  const updateItem = (key, updater, sIdx = null) => {
     setItems((prev) => {
       const current = prev[key] || {};
       const updated = updater(JSON.parse(JSON.stringify(current)));
       const nextItems = { ...prev, [key]: updated };
       saveSession(nextItems);
+
+      if (sIdx !== null) {
+        checkAutoCollapse(sIdx, nextItems);
+      }
       return nextItems;
     });
   };
 
-  // Load history list
+  // Auto-collapse section on finish
+  const checkAutoCollapse = (sIdx, currentItems) => {
+    const section = currentProgramDay.sections[sIdx];
+    if (!section) return;
+
+    const isAllDone = section.items.every((it, iIdx) => {
+      const k = `${sIdx}:${iIdx}`;
+      const itemData = currentItems[k] || {};
+      if (it.kind === "simple" || it.kind === "result") {
+        return !!itemData.done;
+      }
+      if (it.kind === "sets") {
+        const count = itemData.customSetCount !== undefined ? itemData.customSetCount : it.setCount;
+        const sObj = itemData.sets || {};
+        for (let s = 1; s <= count; s++) {
+          if (!sObj[String(s)]?.done) return false;
+        }
+        return true;
+      }
+      return true;
+    });
+
+    if (isAllDone) {
+      triggerHaptic("success");
+      setTimeout(() => {
+        setCollapsedSections((prev) => {
+          if (prev[sIdx]) return prev;
+          return { ...prev, [sIdx]: true };
+        });
+      }, 650);
+    }
+  };
+
+  // Toggle section collapse
+  const toggleSection = (sIdx) => {
+    triggerHaptic("light");
+    setCollapsedSections((prev) => ({
+      ...prev,
+      [sIdx]: !prev[sIdx],
+    }));
+  };
+
+  // Load history list and past sessions for ghost values
   const loadHistory = async () => {
     let sessions = [];
     let fetchedFromMongo = false;
@@ -357,6 +418,7 @@ export default function WorkoutPage() {
         const data = await res.json();
         if (data.mongoConnected && Array.isArray(data.sessions)) {
           sessions = data.sessions.filter((s) => hasSessionData(s.items));
+          setAllPastSessions(data.sessions);
           fetchedFromMongo = true;
         }
       }
@@ -368,16 +430,46 @@ export default function WorkoutPage() {
         const cached = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
         sessions = Object.entries(cached)
           .filter(([_, sessionItems]) => hasSessionData(sessionItems))
-          .map(([key]) => {
+          .map(([key, sessionItems]) => {
             const [date, day] = key.split("|");
-            return { date, day };
+            return { date, day, items: sessionItems };
           })
           .sort((a, b) => b.date.localeCompare(a.date));
+        setAllPastSessions(sessions);
       } catch (e) {}
     }
 
     setHistoryList(sessions);
   };
+
+  // Pre-load past sessions on mount & date change for ghost display
+  useEffect(() => {
+    loadHistory();
+  }, [selectedDate, selectedDay]);
+
+  // Compute most recent previous session for progressive overload ghost values
+  const previousSession = useMemo(() => {
+    if (allPastSessions && allPastSessions.length > 0) {
+      const match = allPastSessions.find(
+        (s) => s.day === selectedDay && s.date < selectedDate && hasSessionData(s.items)
+      );
+      if (match) return match;
+    }
+
+    try {
+      const cached = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
+      const list = Object.entries(cached)
+        .map(([k, sItems]) => {
+          const [d, day] = k.split("|");
+          return { date: d, day, items: sItems };
+        })
+        .filter((s) => s.day === selectedDay && s.date < selectedDate && hasSessionData(s.items))
+        .sort((a, b) => b.date.localeCompare(a.date));
+      if (list.length > 0) return list[0];
+    } catch (e) {}
+
+    return null;
+  }, [allPastSessions, selectedDay, selectedDate]);
 
   const toggleHistory = () => {
     if (!showHistory) {
@@ -388,12 +480,17 @@ export default function WorkoutPage() {
 
   const currentProgramDay = PROGRAM[selectedDay] || PROGRAM.day1;
 
-  // Session progress calculation
-  const totalSetsInDay = currentProgramDay.sections.reduce((acc, sec) => {
+  // Session progress calculation (dynamically accounts for added/removed sets)
+  const totalSetsInDay = currentProgramDay.sections.reduce((acc, sec, sIdx) => {
     return (
       acc +
-      sec.items.reduce((sAcc, item) => {
-        if (item.kind === "sets") return sAcc + (item.setCount || 0);
+      sec.items.reduce((sAcc, item, iIdx) => {
+        const key = `${sIdx}:${iIdx}`;
+        const saved = items[key] || {};
+        if (item.kind === "sets") {
+          const sCount = saved.customSetCount !== undefined ? saved.customSetCount : item.setCount;
+          return sAcc + sCount;
+        }
         if (item.kind === "simple" || item.kind === "result") return sAcc + 1;
         return sAcc;
       }, 0)
@@ -641,324 +738,447 @@ export default function WorkoutPage() {
       </div>
 
       {/* Workout Sections */}
-      {currentProgramDay.sections.map((section, sIdx) => (
-        <section key={sIdx} className="workout-section">
-          <div className="section-header">
-            <h3>{section.title}</h3>
-            {section.hint && <span className="section-hint">{section.hint}</span>}
-          </div>
+      {currentProgramDay.sections.map((section, sIdx) => {
+        const isCollapsed = !!collapsedSections[sIdx];
 
-          <div className="section-items">
-            {section.items.map((item, iIdx) => {
-              const key = `${sIdx}:${iIdx}`;
-              const saved = items[key] || {};
+        // Calculate completion status for section header badge
+        let sectionDoneCount = 0;
+        section.items.forEach((it, iIdx) => {
+          const k = `${sIdx}:${iIdx}`;
+          const itData = items[k] || {};
+          if (it.kind === "simple" || it.kind === "result") {
+            if (itData.done) sectionDoneCount++;
+          } else if (it.kind === "sets") {
+            const count = itData.customSetCount !== undefined ? itData.customSetCount : it.setCount;
+            const sObj = itData.sets || {};
+            let allDone = true;
+            for (let s = 1; s <= count; s++) {
+              if (!sObj[String(s)]?.done) {
+                allDone = false;
+                break;
+              }
+            }
+            if (allDone && count > 0) sectionDoneCount++;
+          }
+        });
+        const isSectionComplete = section.items.length > 0 && sectionDoneCount === section.items.length;
 
-              return (
-                <div key={key} className="exercise-box">
-                  <div className="exercise-info">
-                    <div className="exercise-name">{item.name}</div>
-                    {item.prescription && (
-                      <div className="exercise-prescription">
-                        {item.prescription}
-                      </div>
-                    )}
-                    {item.note && <div className="exercise-note">{item.note}</div>}
-                  </div>
+        return (
+          <section key={sIdx} className="workout-section">
+            <div
+              className="section-header clickable"
+              onClick={() => toggleSection(sIdx)}
+              role="button"
+              aria-expanded={!isCollapsed}
+              title={isCollapsed ? "Click to expand" : "Click to collapse"}
+            >
+              <div className="section-header-title-wrap">
+                <span className={`section-collapse-chevron ${isCollapsed ? "collapsed" : ""}`}>
+                  ▼
+                </span>
+                <h3>{section.title}</h3>
+                {section.hint && <span className="section-hint">{section.hint}</span>}
+              </div>
 
-                  {/* Simple completion check (warmups / mobility) */}
-                  {item.kind === "simple" && (
-                    <div
-                      className={`simple-check-row ${saved.done ? "is-done" : ""}`}
-                      onClick={() => {
-                        const nextDone = !saved.done;
-                        updateItem(key, (it) => ({ ...it, done: nextDone }));
-                      }}
-                    >
-                      <button
-                        type="button"
-                        className={`set-done-btn ${saved.done ? "is-done" : ""}`}
-                        aria-label={`Mark ${item.name} ${saved.done ? "incomplete" : "complete"}`}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          const nextDone = !saved.done;
-                          updateItem(key, (it) => ({ ...it, done: nextDone }));
-                        }}
-                      >
-                        {saved.done ? (
-                          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-                            <polyline points="20 6 9 17 4 12" />
-                          </svg>
-                        ) : (
-                          <span className="set-done-circle" />
-                        )}
-                      </button>
-                      <span className="simple-check-label">
-                        {saved.done ? "✓ Completed" : "Mark as completed"}
-                      </span>
-                    </div>
-                  )}
+              <div className="section-header-badge-wrap">
+                <span className={`section-status-badge ${isSectionComplete ? "completed" : ""}`}>
+                  {isSectionComplete ? "✓ Complete" : `${sectionDoneCount}/${section.items.length}`}
+                </span>
+              </div>
+            </div>
 
-                  {/* Sets table */}
-                  {item.kind === "sets" && (() => {
-                    const defaultReps = getDefaultReps(item.target);
+            {!isCollapsed && (
+              <div className="section-items">
+                {section.items.map((item, iIdx) => {
+                  const key = `${sIdx}:${iIdx}`;
+                  const saved = items[key] || {};
+                  const prevItem = previousSession?.items?.[key];
 
-                    const handleWeightChange = (setNum, val) => {
-                      updateItem(key, (it) => {
-                        const nextSets = { ...(it.sets || {}) };
-                        const setKey = String(setNum);
-                        const oldWeight = nextSets[setKey]?.weight || "";
-
-                        nextSets[setKey] = {
-                          ...(nextSets[setKey] || {}),
-                          weight: val,
-                        };
-
-                        // When weight is entered, populate default reps if reps is empty
-                        if (val.trim() !== "" && (!nextSets[setKey].reps || nextSets[setKey].reps.trim() === "")) {
-                          nextSets[setKey].reps = defaultReps;
-                        }
-
-                        // If editing Set 1 and exercise has multiple sets:
-                        // Copy weight to subsequent sets if they are empty or matched old Set 1 weight
-                        if (setNum === 1 && item.setCount > 1) {
-                          for (let s = 2; s <= item.setCount; s++) {
-                            const sKey = String(s);
-                            const curSet = nextSets[sKey] || {};
-                            const curWeight = curSet.weight || "";
-                            if (curWeight === "" || curWeight === oldWeight) {
-                              nextSets[sKey] = {
-                                ...curSet,
-                                weight: val,
-                              };
-                              if (val.trim() !== "" && (!nextSets[sKey].reps || nextSets[sKey].reps.trim() === "")) {
-                                nextSets[sKey].reps = defaultReps;
-                              }
-                            }
-                          }
-                        }
-
-                        return { ...it, sets: nextSets };
-                      });
-                    };
-
-                    const handleRepsChange = (setNum, val) => {
-                      updateItem(key, (it) => {
-                        const nextSets = { ...(it.sets || {}) };
-                        const setKey = String(setNum);
-                        nextSets[setKey] = {
-                          ...(nextSets[setKey] || {}),
-                          reps: val,
-                        };
-                        return { ...it, sets: nextSets };
-                      });
-                    };
-
-                    const handleStepReps = (setNum, delta) => {
-                      updateItem(key, (it) => {
-                        const nextSets = { ...(it.sets || {}) };
-                        const setKey = String(setNum);
-                        const curReps = nextSets[setKey]?.reps;
-                        let baseVal;
-                        if (curReps !== undefined && curReps !== null && String(curReps).trim() !== "") {
-                          const parsed = parseInt(String(curReps).trim(), 10);
-                          baseVal = isNaN(parsed) ? parseInt(defaultReps, 10) : parsed;
-                        } else {
-                          baseVal = parseInt(defaultReps, 10);
-                        }
-                        const nextVal = Math.max(0, baseVal + delta);
-                        nextSets[setKey] = {
-                          ...(nextSets[setKey] || {}),
-                          reps: String(nextVal),
-                        };
-                        return { ...it, sets: nextSets };
-                      });
-                    };
-
-                    const handleDoneToggle = (setNum, checked) => {
-                      updateItem(key, (it) => {
-                        const nextSets = { ...(it.sets || {}) };
-                        const setKey = String(setNum);
-
-                        nextSets[setKey] = {
-                          ...(nextSets[setKey] || {}),
-                          done: checked,
-                        };
-
-                        // If marked done, auto-check all preceding sets (1 .. setNum - 1) if not already done
-                        if (checked && setNum > 1) {
-                          for (let s = 1; s < setNum; s++) {
-                            const prevKey = String(s);
-                            const prevSet = nextSets[prevKey] || {};
-                            if (!prevSet.done) {
-                              nextSets[prevKey] = {
-                                ...prevSet,
-                                done: true,
-                              };
-                            }
-                          }
-                        }
-
-                        return { ...it, sets: nextSets };
-                      });
-                    };
-
-                    return (
-                      <div className="sets-container">
-                        <div className="sets-header-row">
-                          <div style={{ textAlign: "center" }}>Set</div>
-                          <div>Weight</div>
-                          <div className="reps-header-cell">
-                            <span>Reps</span>
-                            {item.target && (
-                              <span className="target-pill" title={`Target range: ${item.target} reps`}>
-                                ({item.target})
-                              </span>
-                            )}
+                  return (
+                    <div key={key} className="exercise-box">
+                      <div className="exercise-info">
+                        <div className="exercise-name">{item.name}</div>
+                        {item.prescription && (
+                          <div className="exercise-prescription">
+                            {item.prescription}
                           </div>
-                          <div style={{ textAlign: "center" }}>Done</div>
-                        </div>
-
-                        {Array.from({ length: item.setCount }, (_, n) => n + 1).map(
-                          (setNum) => {
-                            const setKey = String(setNum);
-                            const setData = (saved.sets || {})[setKey] || {};
-                            const disableWeight = item.track === "reps";
-                            const isDone = !!setData.done;
-
-                            return (
-                              <div
-                                key={setNum}
-                                className={`set-entry-row ${isDone ? "is-done" : ""}`}
-                              >
-                                <div className={`set-number ${isDone ? "is-done" : ""}`}>
-                                  {isDone ? "✓" : setNum}
-                                </div>
-
-                                <div className="set-input-wrap weight-wrap">
-                                  <input
-                                    type="text"
-                                    inputMode="decimal"
-                                    className="set-input weight-input"
-                                    placeholder={disableWeight ? "—" : "kg"}
-                                    disabled={disableWeight}
-                                    value={setData.weight || ""}
-                                    onChange={(e) => handleWeightChange(setNum, e.target.value)}
-                                  />
-                                </div>
-
-                                <div className="reps-stepper">
-                                  <button
-                                    type="button"
-                                    className="stepper-btn minus"
-                                    aria-label={`Decrease reps for set ${setNum}`}
-                                    onClick={() => handleStepReps(setNum, -1)}
-                                    title="-1 rep"
-                                  >
-                                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                                      <line x1="5" y1="12" x2="19" y2="12" />
-                                    </svg>
-                                  </button>
-                                  <input
-                                    type="text"
-                                    inputMode="numeric"
-                                    pattern="[0-9]*"
-                                    className="set-input reps-input"
-                                    placeholder={item.target || "Reps"}
-                                    value={setData.reps || ""}
-                                    onChange={(e) => handleRepsChange(setNum, e.target.value)}
-                                  />
-                                  <button
-                                    type="button"
-                                    className="stepper-btn plus"
-                                    aria-label={`Increase reps for set ${setNum}`}
-                                    onClick={() => handleStepReps(setNum, 1)}
-                                    title="+1 rep"
-                                  >
-                                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                                      <line x1="12" y1="5" x2="12" y2="19" />
-                                      <line x1="5" y1="12" x2="19" y2="12" />
-                                    </svg>
-                                  </button>
-                                </div>
-
-                                <button
-                                  type="button"
-                                  className={`set-done-btn ${isDone ? "is-done" : ""}`}
-                                  aria-label={`Mark set ${setNum} ${isDone ? "incomplete" : "complete"}`}
-                                  onClick={() => handleDoneToggle(setNum, !isDone)}
-                                >
-                                  {isDone ? (
-                                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-                                      <polyline points="20 6 9 17 4 12" />
-                                    </svg>
-                                  ) : (
-                                    <span className="set-done-circle" />
-                                  )}
-                                </button>
-                              </div>
-                            );
-                          }
                         )}
+                        {item.note && <div className="exercise-note">{item.note}</div>}
                       </div>
-                    );
-                  })()}
 
-                  {/* Result / Cardio */}
-                  {item.kind === "result" && (
-                    <div className={`result-container ${saved.done ? "is-done" : ""}`}>
-                      <div className="result-field">
-                        <span className="result-field-label">{item.label1}</span>
-                        <input
-                          type="text"
-                          className="set-input"
-                          value={saved.value1 || ""}
-                          placeholder="e.g. Incline Walk 25m"
-                          onChange={(e) => {
-                            const val = e.target.value;
-                            updateItem(key, (it) => ({ ...it, value1: val }));
-                          }}
-                        />
-                      </div>
-                      <div className="result-field">
-                        <span className="result-field-label">{item.label2}</span>
-                        <input
-                          type="text"
-                          className="set-input"
-                          value={saved.value2 || ""}
-                          placeholder="Notes / speed / incline"
-                          onChange={(e) => {
-                            const val = e.target.value;
-                            updateItem(key, (it) => ({ ...it, value2: val }));
-                          }}
-                        />
-                      </div>
-                      <div className="result-done-col">
-                        <button
-                          type="button"
-                          className={`set-done-btn ${saved.done ? "is-done" : ""}`}
-                          aria-label={`Mark completed`}
+                      {/* Simple completion check (warmups / mobility) */}
+                      {item.kind === "simple" && (
+                        <div
+                          className={`simple-check-row ${saved.done ? "is-done" : ""}`}
                           onClick={() => {
+                            triggerHaptic("medium");
                             const nextDone = !saved.done;
-                            updateItem(key, (it) => ({ ...it, done: nextDone }));
+                            updateItem(key, (it) => ({ ...it, done: nextDone }), sIdx);
                           }}
                         >
-                          {saved.done ? (
-                            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-                              <polyline points="20 6 9 17 4 12" />
-                            </svg>
-                          ) : (
-                            <span className="set-done-circle" />
-                          )}
-                        </button>
-                      </div>
+                          <button
+                            type="button"
+                            className={`set-done-btn ${saved.done ? "is-done" : ""}`}
+                            aria-label={`Mark ${item.name} ${saved.done ? "incomplete" : "complete"}`}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              triggerHaptic("medium");
+                              const nextDone = !saved.done;
+                              updateItem(key, (it) => ({ ...it, done: nextDone }), sIdx);
+                            }}
+                          >
+                            {saved.done ? (
+                              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                                <polyline points="20 6 9 17 4 12" />
+                              </svg>
+                            ) : (
+                              <span className="set-done-circle" />
+                            )}
+                          </button>
+                          <span className="simple-check-label">
+                            {saved.done ? "✓ Completed" : "Mark as completed"}
+                          </span>
+                        </div>
+                      )}
+
+                      {/* Sets table */}
+                      {item.kind === "sets" && (() => {
+                        const defaultReps = getDefaultReps(item.target);
+                        const currentSetCount = saved.customSetCount !== undefined ? saved.customSetCount : item.setCount;
+
+                        const handleWeightChange = (setNum, val) => {
+                          updateItem(key, (it) => {
+                            const nextSets = { ...(it.sets || {}) };
+                            const setKey = String(setNum);
+                            const oldWeight = nextSets[setKey]?.weight || "";
+
+                            nextSets[setKey] = {
+                              ...(nextSets[setKey] || {}),
+                              weight: val,
+                            };
+
+                            // When weight is entered, populate default reps if reps is empty
+                            if (val.trim() !== "" && (!nextSets[setKey].reps || nextSets[setKey].reps.trim() === "")) {
+                              nextSets[setKey].reps = defaultReps;
+                            }
+
+                            // If editing Set 1 and exercise has multiple sets:
+                            // Copy weight to subsequent sets if they are empty or matched old Set 1 weight
+                            if (setNum === 1 && currentSetCount > 1) {
+                              for (let s = 2; s <= currentSetCount; s++) {
+                                const sKey = String(s);
+                                const curSet = nextSets[sKey] || {};
+                                const curWeight = curSet.weight || "";
+                                if (curWeight === "" || curWeight === oldWeight) {
+                                  nextSets[sKey] = {
+                                    ...curSet,
+                                    weight: val,
+                                  };
+                                  if (val.trim() !== "" && (!nextSets[sKey].reps || nextSets[sKey].reps.trim() === "")) {
+                                    nextSets[sKey].reps = defaultReps;
+                                  }
+                                }
+                              }
+                            }
+
+                            return { ...it, sets: nextSets };
+                          }, sIdx);
+                        };
+
+                        const handleRepsChange = (setNum, val) => {
+                          updateItem(key, (it) => {
+                            const nextSets = { ...(it.sets || {}) };
+                            const setKey = String(setNum);
+                            nextSets[setKey] = {
+                              ...(nextSets[setKey] || {}),
+                              reps: val,
+                            };
+                            return { ...it, sets: nextSets };
+                          }, sIdx);
+                        };
+
+                        const handleStepReps = (setNum, delta) => {
+                          triggerHaptic("light");
+                          updateItem(key, (it) => {
+                            const nextSets = { ...(it.sets || {}) };
+                            const setKey = String(setNum);
+                            const curReps = nextSets[setKey]?.reps;
+                            let baseVal;
+                            if (curReps !== undefined && curReps !== null && String(curReps).trim() !== "") {
+                              const parsed = parseInt(String(curReps).trim(), 10);
+                              baseVal = isNaN(parsed) ? parseInt(defaultReps, 10) : parsed;
+                            } else {
+                              baseVal = parseInt(defaultReps, 10);
+                            }
+                            const nextVal = Math.max(0, baseVal + delta);
+                            nextSets[setKey] = {
+                              ...(nextSets[setKey] || {}),
+                              reps: String(nextVal),
+                            };
+                            return { ...it, sets: nextSets };
+                          }, sIdx);
+                        };
+
+                        const handleDoneToggle = (setNum, checked) => {
+                          triggerHaptic(checked ? "medium" : "light");
+                          updateItem(key, (it) => {
+                            const nextSets = { ...(it.sets || {}) };
+                            const setKey = String(setNum);
+
+                            nextSets[setKey] = {
+                              ...(nextSets[setKey] || {}),
+                              done: checked,
+                            };
+
+                            // If marked done, auto-check all preceding sets (1 .. setNum - 1) if not already done
+                            if (checked && setNum > 1) {
+                              for (let s = 1; s < setNum; s++) {
+                                const prevKey = String(s);
+                                const prevSet = nextSets[prevKey] || {};
+                                if (!prevSet.done) {
+                                  nextSets[prevKey] = {
+                                    ...prevSet,
+                                    done: true,
+                                  };
+                                }
+                              }
+                            }
+
+                            return { ...it, sets: nextSets };
+                          }, sIdx);
+                        };
+
+                        return (
+                          <div className="sets-container">
+                            <div className="sets-header-row">
+                              <div style={{ textAlign: "center" }}>Set</div>
+                              <div>Weight</div>
+                              <div className="reps-header-cell">
+                                <span>Reps</span>
+                                {item.target && (
+                                  <span className="target-pill" title={`Target range: ${item.target} reps`}>
+                                    ({item.target})
+                                  </span>
+                                )}
+                              </div>
+                              <div style={{ textAlign: "center" }}>Done</div>
+                            </div>
+
+                            {Array.from({ length: currentSetCount }, (_, n) => n + 1).map(
+                              (setNum) => {
+                                const setKey = String(setNum);
+                                const setData = (saved.sets || {})[setKey] || {};
+                                const prevSet = prevItem?.sets?.[setKey];
+                                const disableWeight = item.track === "reps";
+                                const isDone = !!setData.done;
+
+                                return (
+                                  <div
+                                    key={setNum}
+                                    className={`set-entry-row ${isDone ? "is-done" : ""}`}
+                                  >
+                                    <div className={`set-number ${isDone ? "is-done" : ""}`}>
+                                      {isDone ? "✓" : setNum}
+                                    </div>
+
+                                    <div className="set-input-wrap weight-wrap">
+                                      <input
+                                        type="text"
+                                        inputMode="decimal"
+                                        className="set-input weight-input"
+                                        placeholder={prevSet?.weight ? `Last: ${prevSet.weight}` : (disableWeight ? "—" : "kg")}
+                                        disabled={disableWeight}
+                                        value={setData.weight || ""}
+                                        onChange={(e) => handleWeightChange(setNum, e.target.value)}
+                                      />
+                                    </div>
+
+                                    <div className="reps-stepper-wrap">
+                                      <div className="reps-stepper">
+                                        <button
+                                          type="button"
+                                          className="stepper-btn minus"
+                                          aria-label={`Decrease reps for set ${setNum}`}
+                                          onClick={() => handleStepReps(setNum, -1)}
+                                          title="-1 rep"
+                                        >
+                                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                                            <line x1="5" y1="12" x2="19" y2="12" />
+                                          </svg>
+                                        </button>
+                                        <input
+                                          type="text"
+                                          inputMode="numeric"
+                                          pattern="[0-9]*"
+                                          className="set-input reps-input"
+                                          placeholder={prevSet?.reps ? `Last: ${prevSet.reps}` : (item.target || "Reps")}
+                                          value={setData.reps || ""}
+                                          onChange={(e) => handleRepsChange(setNum, e.target.value)}
+                                        />
+                                        <button
+                                          type="button"
+                                          className="stepper-btn plus"
+                                          aria-label={`Increase reps for set ${setNum}`}
+                                          onClick={() => handleStepReps(setNum, 1)}
+                                          title="+1 rep"
+                                        >
+                                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                                            <line x1="12" y1="5" x2="12" y2="19" />
+                                            <line x1="5" y1="12" x2="19" y2="12" />
+                                          </svg>
+                                        </button>
+                                      </div>
+
+                                      {/* Previous session ghost chip */}
+                                      {prevSet && (prevSet.weight || prevSet.reps) && (
+                                        <button
+                                          type="button"
+                                          className="prev-ghost-chip"
+                                          title="Tap to apply previous workout values"
+                                          onClick={() => {
+                                            triggerHaptic("light");
+                                            if (prevSet.weight) handleWeightChange(setNum, prevSet.weight);
+                                            if (prevSet.reps) handleRepsChange(setNum, prevSet.reps);
+                                          }}
+                                        >
+                                          <span className="ghost-arrow">⏮</span>
+                                          <span>Last: {prevSet.weight ? `${prevSet.weight}kg` : ""}{prevSet.weight && prevSet.reps ? " × " : ""}{prevSet.reps ? `${prevSet.reps}` : ""}</span>
+                                        </button>
+                                      )}
+                                    </div>
+
+                                    <button
+                                      type="button"
+                                      className={`set-done-btn ${isDone ? "is-done" : ""}`}
+                                      aria-label={`Mark set ${setNum} ${isDone ? "incomplete" : "complete"}`}
+                                      onClick={() => handleDoneToggle(setNum, !isDone)}
+                                    >
+                                      {isDone ? (
+                                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                                          <polyline points="20 6 9 17 4 12" />
+                                        </svg>
+                                      ) : (
+                                        <span className="set-done-circle" />
+                                      )}
+                                    </button>
+                                  </div>
+                                );
+                              }
+                            )}
+
+                            {/* Dynamic Add / Remove Sets Controls */}
+                            <div className="sets-action-bar">
+                              <button
+                                type="button"
+                                className="set-action-btn add-set-btn"
+                                onClick={() => {
+                                  triggerHaptic("light");
+                                  updateItem(key, (it) => {
+                                    const count = it.customSetCount !== undefined ? it.customSetCount : item.setCount;
+                                    const nextCount = count + 1;
+                                    const nextSets = { ...(it.sets || {}) };
+                                    const prevWeight = nextSets[String(count)]?.weight || nextSets["1"]?.weight || "";
+                                    nextSets[String(nextCount)] = {
+                                      weight: prevWeight,
+                                      reps: defaultReps,
+                                      done: false,
+                                    };
+                                    return { ...it, customSetCount: nextCount, sets: nextSets };
+                                  }, sIdx);
+                                }}
+                              >
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                                  <line x1="12" y1="5" x2="12" y2="19" />
+                                  <line x1="5" y1="12" x2="19" y2="12" />
+                                </svg>
+                                Add Set
+                              </button>
+
+                              {currentSetCount > 1 && (
+                                <button
+                                  type="button"
+                                  className="set-action-btn remove-set-btn"
+                                  onClick={() => {
+                                    triggerHaptic("light");
+                                    updateItem(key, (it) => {
+                                      const count = it.customSetCount !== undefined ? it.customSetCount : item.setCount;
+                                      const nextCount = Math.max(1, count - 1);
+                                      const nextSets = { ...(it.sets || {}) };
+                                      delete nextSets[String(count)];
+                                      return { ...it, customSetCount: nextCount, sets: nextSets };
+                                    }, sIdx);
+                                  }}
+                                >
+                                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                                    <line x1="5" y1="12" x2="19" y2="12" />
+                                  </svg>
+                                  Remove Set {currentSetCount}
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })()}
+
+                      {/* Result / Cardio */}
+                      {item.kind === "result" && (
+                        <div className={`result-container ${saved.done ? "is-done" : ""}`}>
+                          <div className="result-field">
+                            <span className="result-field-label">{item.label1}</span>
+                            <input
+                              type="text"
+                              className="set-input"
+                              value={saved.value1 || ""}
+                              placeholder="e.g. Incline Walk 25m"
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                updateItem(key, (it) => ({ ...it, value1: val }), sIdx);
+                              }}
+                            />
+                          </div>
+                          <div className="result-field">
+                            <span className="result-field-label">{item.label2}</span>
+                            <input
+                              type="text"
+                              className="set-input"
+                              value={saved.value2 || ""}
+                              placeholder="Notes / speed / incline"
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                updateItem(key, (it) => ({ ...it, value2: val }), sIdx);
+                              }}
+                            />
+                          </div>
+                          <div className="result-done-col">
+                            <button
+                              type="button"
+                              className={`set-done-btn ${saved.done ? "is-done" : ""}`}
+                              aria-label={`Mark completed`}
+                              onClick={() => {
+                                triggerHaptic("medium");
+                                const nextDone = !saved.done;
+                                updateItem(key, (it) => ({ ...it, done: nextDone }), sIdx);
+                              }}
+                            >
+                              {saved.done ? (
+                                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                                  <polyline points="20 6 9 17 4 12" />
+                                </svg>
+                              ) : (
+                                <span className="set-done-circle" />
+                              )}
+                            </button>
+                          </div>
+                        </div>
+                      )}
                     </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        </section>
-      ))}
+                  );
+                })}
+              </div>
+            )}
+          </section>
+        );
+      })}
 
       {/* Program Guidelines / Reference */}
       <section className="reference-section" aria-label="Reference rules">
