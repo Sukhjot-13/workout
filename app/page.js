@@ -214,6 +214,12 @@ export default function WorkoutPage() {
   const [allPastSessions, setAllPastSessions] = useState([]);
   const [collapsedSections, setCollapsedSections] = useState({});
   const saveTimeoutRef = useRef(null);
+  // Mirror of `items` for updateItem: lets us compute the next state from
+  // the latest committed value without putting side effects (save, collapse
+  // timers) inside a setState updater, which React may invoke twice in
+  // StrictMode and which must stay pure.
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
 
   // Check MongoDB connection status
   const checkStatus = useCallback(async () => {
@@ -351,19 +357,21 @@ export default function WorkoutPage() {
     [selectedDate, selectedDay]
   );
 
-  // Update an item in the session
+  // Update an item in the session. Pure state update first, then side
+  // effects (persist + auto-collapse) outside the updater so rapid
+  // successive updates never work from stale state and StrictMode never
+  // double-fires saves.
   const updateItem = (key, updater, sIdx = null) => {
-    setItems((prev) => {
-      const current = prev[key] || {};
-      const updated = updater(JSON.parse(JSON.stringify(current)));
-      const nextItems = { ...prev, [key]: updated };
-      saveSession(nextItems);
+    const current = itemsRef.current[key] || {};
+    const updated = updater(JSON.parse(JSON.stringify(current)));
+    const nextItems = { ...itemsRef.current, [key]: updated };
+    itemsRef.current = nextItems;
+    setItems(nextItems);
+    saveSession(nextItems);
 
-      if (sIdx !== null) {
-        checkAutoCollapse(sIdx, nextItems);
-      }
-      return nextItems;
-    });
+    if (sIdx !== null) {
+      checkAutoCollapse(sIdx, nextItems);
+    }
   };
 
   // Auto-collapse section on finish
