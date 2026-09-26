@@ -1,24 +1,24 @@
 :root {
-  --bg: #090d16;
-  --bg-gradient: radial-gradient(circle at 10% 0%, rgba(56, 189, 248, 0.08), transparent 35%),
-                 radial-gradient(circle at 90% 0%, rgba(52, 211, 153, 0.08), transparent 30%),
-                 #090d16;
-  --card: #101726;
-  --card-elevated: #151f33;
-  --card-border: #1e293b;
-  --line: #243047;
-  --line-subtle: #192338;
+  --bg: #090a0f;
+  --bg-gradient: radial-gradient(ellipse 90% 45% at 50% -10%, rgba(16, 185, 129, 0.09), transparent 60%),
+                 radial-gradient(ellipse 70% 35% at 90% -5%, rgba(56, 189, 248, 0.07), transparent 50%),
+                 #090a0f;
+  --card: #11141c;
+  --card-elevated: #161a25;
+  --card-border: rgba(255, 255, 255, 0.08);
+  --line: rgba(255, 255, 255, 0.08);
+  --line-subtle: rgba(255, 255, 255, 0.04);
   --text: #f8fafc;
   --text-muted: #94a3b8;
   --text-faint: #64748b;
   --accent: #10b981;
-  --accent-glow: rgba(16, 185, 129, 0.15);
+  --accent-glow: rgba(16, 185, 129, 0.16);
   --accent-blue: #38bdf8;
-  --input-bg: #0b1120;
-  --input-border: #23304a;
-  --input-focus: #38bdf8;
+  --input-bg: #0a0d14;
+  --input-border: rgba(255, 255, 255, 0.10);
+  --input-focus: #10b981;
   --success: #34d399;
-  --shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3), 0 8px 10px -6px rgba(0, 0, 0, 0.2);
+  --shadow: 0 10px 30px -5px rgba(0, 0, 0, 0.5), 0 4px 12px -2px rgba(0, 0, 0, 0.3);
   --radius: 14px;
 }
 
@@ -67,7 +67,7 @@ input, button, select, textarea {
   font-weight: 800;
   margin: 0 0 6px;
   letter-spacing: -0.03em;
-  background: linear-gradient(135deg, #ffffff 40%, #94a3b8 100%);
+  background: linear-gradient(135deg, #ffffff 40%, #cbd5e1 100%);
   -webkit-background-clip: text;
   background-clip: text;
   -webkit-text-fill-color: transparent;
@@ -94,14 +94,15 @@ input, button, select, textarea {
   font-weight: 600;
   padding: 6px 12px;
   border-radius: 20px;
-  background: rgba(16, 23, 38, 0.8);
-  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--card-border);
+  color: var(--text-muted);
 }
 
 .status-badge.connected {
-  border-color: rgba(52, 211, 153, 0.35);
+  border-color: rgba(16, 185, 129, 0.35);
   background: rgba(16, 185, 129, 0.1);
-  color: var(--accent);
+  color: #34d399;
 }
 
 .status-badge.local {
@@ -125,7 +126,7 @@ input, button, select, textarea {
 
 .history-toggle-btn {
   background: var(--card-elevated);
-  border: 1px solid var(--line);
+  border: 1px solid var(--card-border);
   color: var(--text);
   font-size: 0.82rem;
   font-weight: 600;
@@ -136,8 +137,8 @@ input, button, select, textarea {
 }
 
 .history-toggle-btn:hover {
-  border-color: var(--accent-blue);
-  background: #1c2a46;
+  border-color: rgba(255, 255, 255, 0.2);
+  background: #1c2230;
 }
 
 /* Quick Day Tabs */
@@ -155,8 +156,8 @@ input, button, select, textarea {
   justify-content: center;
   padding: 10px 8px;
   border-radius: 12px;
-  background: rgba(16, 23, 38, 0.65);
-  border: 1px solid var(--line);
+  background: var(--card);
+  border: 1px solid var(--card-border);
   color: var(--text-muted);
   cursor: pointer;
   transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
@@ -167,16 +168,16 @@ input, button, select, textarea {
 
 .day-tab-btn:hover {
   background: var(--card-elevated);
-  border-color: rgba(56, 189, 248, 0.4);
+  border-color: rgba(255, 255, 255, 0.18);
   color: var(--text);
   transform: translateY(-1px);
 }
 
 .day-tab-btn.active {
-  background: linear-gradient(135deg, rgba(56, 189, 248, 0.15) 0%, rgba(16, 185, 129, 0.15) 100%);
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.18) 0%, rgba(56, 189, 248, 0.10) 100%);
   border-color: var(--accent);
   color: #fff;
-  box-shadow: 0 4px 16px rgba(16, 185, 129, 0.18);
+  box-shadow: 0 4px 20px rgba(16, 185, 129, 0.2);
 }
 
 .day-tab-label {
@@ -200,7 +201,7 @@ input, button, select, textarea {
 }
 
 .day-tab-btn.active .day-tab-name {
-  color: var(--accent);
+  color: #34d399;
   font-weight: 600;
 }
 
@@ -213,10 +214,10 @@ input, button, select, textarea {
   grid-template-columns: 1.4fr 1fr auto;
   gap: 12px;
   align-items: end;
-  background: rgba(14, 21, 37, 0.96);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  border: 1px solid var(--line);
+  background: rgba(16, 20, 29, 0.88);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  border: 1px solid var(--card-border);
   border-radius: var(--radius);
   padding: 12px 14px;
   margin-bottom: 20px;
@@ -254,8 +255,8 @@ input, button, select, textarea {
 
 .control-select:focus,
 .control-input:focus {
-  border-color: var(--accent-blue);
-  box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.12);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.15);
 }
 
 .sync-indicator {
@@ -268,13 +269,13 @@ input, button, select, textarea {
   font-size: 0.8rem;
   font-weight: 700;
   border-radius: 10px;
-  border: 1px solid var(--line);
-  background: rgba(16, 23, 38, 0.5);
+  border: 1px solid var(--card-border);
+  background: rgba(255, 255, 255, 0.03);
   color: var(--text-muted);
 }
 
 .sync-indicator.synced {
-  color: var(--accent);
+  color: #34d399;
   border-color: rgba(16, 185, 129, 0.3);
   background: rgba(16, 185, 129, 0.08);
 }
@@ -288,7 +289,7 @@ input, button, select, textarea {
 /* History Modal / Drawer */
 .history-panel {
   background: var(--card);
-  border: 1px solid var(--line);
+  border: 1px solid var(--card-border);
   border-radius: var(--radius);
   padding: 16px 18px;
   margin-bottom: 22px;
@@ -323,7 +324,7 @@ input, button, select, textarea {
   padding: 10px 12px;
   border-radius: 8px;
   background: var(--card-elevated);
-  border: 1px solid var(--line-subtle);
+  border: 1px solid var(--card-border);
   color: var(--text);
   cursor: pointer;
   text-align: left;
@@ -331,8 +332,8 @@ input, button, select, textarea {
 }
 
 .history-item-btn:hover {
-  border-color: var(--accent-blue);
-  background: #182338;
+  border-color: rgba(255, 255, 255, 0.2);
+  background: #1c2230;
 }
 
 .history-item-date {
@@ -358,7 +359,7 @@ input, button, select, textarea {
   background: var(--card);
   border: 1px solid var(--card-border);
   border-radius: var(--radius);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+  box-shadow: var(--shadow);
 }
 
 .day-info-main {
@@ -383,8 +384,8 @@ input, button, select, textarea {
 .day-progress-wrap {
   width: 240px;
   flex-shrink: 0;
-  background: rgba(11, 17, 32, 0.6);
-  border: 1px solid var(--line-subtle);
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.06);
   border-radius: 10px;
   padding: 10px 14px;
 }
@@ -419,7 +420,7 @@ input, button, select, textarea {
   width: 100%;
   height: 6px;
   border-radius: 999px;
-  background: rgba(30, 41, 59, 0.8);
+  background: rgba(255, 255, 255, 0.08);
   overflow: hidden;
 }
 
@@ -428,12 +429,12 @@ input, button, select, textarea {
   border-radius: 999px;
   background: linear-gradient(90deg, var(--accent-blue) 0%, var(--accent) 100%);
   transition: width 0.35s cubic-bezier(0.16, 1, 0.3, 1);
-  box-shadow: 0 0 8px rgba(16, 185, 129, 0.4);
+  box-shadow: 0 0 10px rgba(16, 185, 129, 0.45);
 }
 
 .day-progress-bar.all-done {
   background: var(--accent);
-  box-shadow: 0 0 12px rgba(16, 185, 129, 0.8);
+  box-shadow: 0 0 14px rgba(16, 185, 129, 0.8);
 }
 
 /* Sections */
@@ -462,7 +463,7 @@ input, button, select, textarea {
 }
 
 .section-header.clickable:hover {
-  background: #19243a;
+  background: rgba(255, 255, 255, 0.04);
 }
 
 .section-header-title-wrap {
@@ -504,8 +505,8 @@ input, button, select, textarea {
 
 .section-status-badge.completed {
   background: rgba(16, 185, 129, 0.15);
-  color: var(--accent);
-  border-color: rgba(16, 185, 129, 0.3);
+  color: #34d399;
+  border-color: rgba(16, 185, 129, 0.35);
 }
 
 .section-items {
@@ -514,33 +515,36 @@ input, button, select, textarea {
 
 /* Exercises */
 .exercise-box {
-  background: #0d1424;
-  border: 1px solid #1b263b;
-  border-radius: 11px;
-  margin: 8px 0;
+  background: #131722;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 12px;
+  margin: 10px 0;
   overflow: hidden;
-  transition: border-color 0.15s;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
+  transition: border-color 0.15s, box-shadow 0.15s;
 }
 
 .exercise-box:hover {
-  border-color: #273752;
+  border-color: rgba(255, 255, 255, 0.15);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
 }
 
 .exercise-info {
-  padding: 11px 13px;
+  padding: 12px 14px;
 }
 
 .exercise-name {
-  font-size: 0.95rem;
+  font-size: 0.96rem;
   font-weight: 700;
-  color: #f1f5f9;
+  color: #ffffff;
+  letter-spacing: -0.01em;
 }
 
 .exercise-prescription {
   margin-top: 3px;
   font-size: 0.85rem;
   font-weight: 700;
-  color: var(--accent);
+  color: #34d399;
 }
 
 .exercise-note {
@@ -554,12 +558,21 @@ input, button, select, textarea {
 .simple-check-row {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 10px 13px;
+  gap: 12px;
+  padding: 10px 14px;
   border-top: 1px solid var(--line-subtle);
-  background: rgba(11, 18, 33, 0.4);
+  background: rgba(0, 0, 0, 0.18);
   cursor: pointer;
   user-select: none;
+  transition: background 0.15s ease;
+}
+
+.simple-check-row:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.simple-check-row.is-done {
+  background: rgba(16, 185, 129, 0.06);
 }
 
 .simple-check-row input[type="checkbox"] {
@@ -570,8 +583,13 @@ input, button, select, textarea {
 }
 
 .simple-check-label {
-  font-size: 0.84rem;
+  font-size: 0.85rem;
+  font-weight: 600;
   color: var(--text-muted);
+}
+
+.simple-check-row.is-done .simple-check-label {
+  color: #34d399;
 }
 
 /* Sets Table */
@@ -609,8 +627,8 @@ input, button, select, textarea {
   padding: 1px 7px;
   border-radius: 10px;
   background: rgba(16, 185, 129, 0.12);
-  border: 1px solid rgba(16, 185, 129, 0.25);
-  color: var(--accent);
+  border: 1px solid rgba(16, 185, 129, 0.28);
+  color: #34d399;
   font-size: 0.68rem;
   font-weight: 700;
   letter-spacing: 0.02em;
@@ -626,12 +644,12 @@ input, button, select, textarea {
 }
 
 .set-entry-row:hover {
-  background: rgba(255, 255, 255, 0.02);
+  background: rgba(255, 255, 255, 0.025);
 }
 
 .set-entry-row.is-done {
-  background: rgba(16, 185, 129, 0.05);
-  border-color: rgba(16, 185, 129, 0.2);
+  background: rgba(16, 185, 129, 0.06);
+  border-color: rgba(16, 185, 129, 0.22);
 }
 
 .set-number {
@@ -643,13 +661,14 @@ input, button, select, textarea {
   height: 28px;
   line-height: 28px;
   border-radius: 50%;
+  background: rgba(255, 255, 255, 0.04);
   margin: 0 auto;
   transition: all 0.2s;
 }
 
 .set-number.is-done {
-  color: var(--accent);
-  background: rgba(16, 185, 129, 0.12);
+  color: #34d399;
+  background: rgba(16, 185, 129, 0.15);
 }
 
 .set-input-wrap {
@@ -663,22 +682,22 @@ input, button, select, textarea {
   border-radius: 8px;
   background: var(--input-bg);
   border: 1px solid var(--input-border);
-  color: var(--text);
-  font-size: 0.9rem;
-  font-weight: 600;
+  color: #ffffff;
+  font-size: 0.92rem;
+  font-weight: 700;
   outline: none;
   transition: border-color 0.15s, box-shadow 0.15s;
 }
 
 .set-input:focus {
-  border-color: var(--accent-blue);
-  box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.15);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.2);
 }
 
 .set-input:disabled {
-  opacity: 0.4;
+  opacity: 0.35;
   cursor: not-allowed;
-  background: #080c16;
+  background: rgba(0, 0, 0, 0.3);
 }
 
 .weight-input {
@@ -698,8 +717,8 @@ input, button, select, textarea {
 }
 
 .reps-stepper:focus-within {
-  border-color: var(--accent-blue);
-  box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.15);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.2);
 }
 
 .stepper-btn {
@@ -721,12 +740,12 @@ input, button, select, textarea {
 
 .stepper-btn:hover {
   background: rgba(255, 255, 255, 0.08);
-  color: var(--text);
+  color: #ffffff;
 }
 
 .stepper-btn:active {
-  background: rgba(56, 189, 248, 0.15);
-  color: var(--accent-blue);
+  background: rgba(16, 185, 129, 0.18);
+  color: #34d399;
   transform: scale(0.92);
 }
 
@@ -740,7 +759,7 @@ input, button, select, textarea {
   padding: 0 2px;
   font-weight: 700;
   font-size: 0.92rem;
-  color: var(--text);
+  color: #ffffff;
   box-shadow: none !important;
 }
 
@@ -759,7 +778,7 @@ input, button, select, textarea {
   font-weight: 600;
   color: var(--accent-blue);
   background: rgba(56, 189, 248, 0.08);
-  border: 1px dashed rgba(56, 189, 248, 0.28);
+  border: 1px dashed rgba(56, 189, 248, 0.32);
   border-radius: 6px;
   padding: 2px 7px;
   cursor: pointer;
@@ -849,9 +868,9 @@ input, button, select, textarea {
   height: 34px;
   margin: 0 auto;
   border-radius: 50%;
-  border: 2px solid #2d3b55;
-  background: rgba(15, 23, 42, 0.7);
-  color: #032b1f;
+  border: 2px solid rgba(255, 255, 255, 0.18);
+  background: #0e121a;
+  color: transparent;
   cursor: pointer;
   transition: all 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
   touch-action: manipulation;
@@ -860,6 +879,7 @@ input, button, select, textarea {
 
 .set-done-btn:hover {
   border-color: var(--accent);
+  box-shadow: 0 0 10px rgba(16, 185, 129, 0.35);
   transform: scale(1.08);
 }
 
@@ -870,8 +890,8 @@ input, button, select, textarea {
 .set-done-btn.is-done {
   background: var(--accent);
   border-color: var(--accent);
-  color: #042f24;
-  box-shadow: 0 0 14px rgba(16, 185, 129, 0.45);
+  color: #04241b;
+  box-shadow: 0 0 16px rgba(16, 185, 129, 0.5);
 }
 
 .set-done-circle {
@@ -880,37 +900,6 @@ input, button, select, textarea {
   height: 8px;
   border-radius: 50%;
   background: transparent;
-}
-
-/* Simple check item styling */
-.simple-check-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 10px 14px;
-  border-top: 1px solid var(--line-subtle);
-  background: rgba(11, 18, 33, 0.4);
-  cursor: pointer;
-  user-select: none;
-  transition: background 0.2s;
-}
-
-.simple-check-row:hover {
-  background: rgba(15, 24, 44, 0.7);
-}
-
-.simple-check-row.is-done {
-  background: rgba(16, 185, 129, 0.05);
-}
-
-.simple-check-label {
-  font-size: 0.85rem;
-  font-weight: 600;
-  color: var(--text-muted);
-}
-
-.simple-check-row.is-done .simple-check-label {
-  color: var(--accent);
 }
 
 /* Result / Cardio Grid */
@@ -925,7 +914,7 @@ input, button, select, textarea {
 }
 
 .result-container.is-done {
-  background: rgba(16, 185, 129, 0.04);
+  background: rgba(16, 185, 129, 0.05);
 }
 
 .result-field {
@@ -952,7 +941,7 @@ input, button, select, textarea {
 .reference-section {
   margin-top: 30px;
   background: var(--card);
-  border: 1px solid var(--line);
+  border: 1px solid var(--card-border);
   border-radius: var(--radius);
   overflow: hidden;
 }
@@ -975,7 +964,7 @@ summary {
 }
 
 summary:hover {
-  background: #18243c;
+  background: rgba(255, 255, 255, 0.04);
 }
 
 .reference-content {
@@ -997,7 +986,7 @@ summary:hover {
   overflow-x: auto;
   margin: 12px 0;
   border-radius: 8px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--card-border);
 }
 
 .ref-table {
@@ -1012,7 +1001,7 @@ summary:hover {
   padding: 10px 14px;
   font-weight: 700;
   color: var(--text);
-  border-bottom: 1px solid var(--line);
+  border-bottom: 1px solid var(--card-border);
   font-size: 0.78rem;
   text-transform: uppercase;
   letter-spacing: 0.05em;
@@ -1029,7 +1018,7 @@ summary:hover {
 }
 
 .ref-table tr:nth-child(even) {
-  background: rgba(11, 18, 33, 0.4);
+  background: rgba(255, 255, 255, 0.02);
 }
 
 .ref-alert-box {
