@@ -26,11 +26,14 @@ export async function GET() {
       }
     }
 
-    // Clean up legacy empty sessions
+    // Clean up legacy empty sessions (awaited so failures surface instead
+    // of silently retrying on every history load).
     if (emptyIds.length > 0) {
-      db.collection("sessions").deleteMany({ _id: { $in: emptyIds } }).catch((err) => {
-        console.warn("Failed to delete empty sessions:", err);
-      });
+      try {
+        await db.collection("sessions").deleteMany({ _id: { $in: emptyIds } });
+      } catch (err) {
+        console.warn("Failed to delete empty sessions:", err.message);
+      }
     }
 
     return Response.json({ sessions: activeSessions.slice(0, 60), mongoConnected: true });

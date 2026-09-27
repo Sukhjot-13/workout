@@ -1,5 +1,10 @@
 # Suggestions — Workout Tracker
 
+> 2026-09-26 hardening pass: vitest suite (`npm test`, 7 tests for
+> `hasSessionData`/`getDefaultReps`/`formatSessionAsText` — the latter two
+> extracted to `lib/session-format.js`), `a.html` marked deprecated,
+> history cleanup `deleteMany` awaited. Items below are done.
+
 ## 🟢 Improvements
 
 - (2026-09-26) No tests or test runner: `package.json` has no `test` script and

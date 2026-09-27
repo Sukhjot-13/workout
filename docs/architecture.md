@@ -8,17 +8,14 @@ back to local-only behavior when `MONGODB_URI` is unset or unreachable.
 
 ## File inventory
 
-### `app/page.js` (~1452 lines, `"use client"`)
+### `app/page.js` (~1400 lines, `"use client"`)
 Main tracker UI. Purpose: day/date selection, set logging, progress, history,
 export, debounced auto-save (localStorage + `POST /api/session`).
-- `formatSessionAsText(session, program)` — renders a session as shareable text.
 - `downloadFile(content, filename, mimeType)` — Blob download helper.
 - `ExportModal({ onClose, currentSession, historyList, program })` — export dialog
   (This Session vs Full History × .txt vs .json); inner `handleExport()` builds
-  content via `formatSessionAsText`/`JSON.stringify` and calls `downloadFile`.
+  content via `formatSessionAsText` (from `@/lib/session-format`)/`JSON.stringify` and calls `downloadFile`.
 - `getLocalDateString()` — local `YYYY-MM-DD` for date input/session keys.
-- `getDefaultReps(target)` — midpoint of a `"8–12"` range (or single number) for
-  ghost/rep placeholders.
 - `triggerHaptic(type)` — `navigator.vibrate` wrapper (light/medium/success).
 - `WorkoutPage()` (default export) — root component + handlers:
   - `checkStatus()` — polls `GET /api/status` (15 s interval) into `mongoStatus`.
@@ -63,8 +60,9 @@ localStorage as source of truth).
 ### `app/api/history/route.js`
 History feed. Offline fallback: `{ sessions: [], mongoConnected: false }`.
 - `GET()` — last 100 sessions sorted by date desc; filters to sessions with
-  data via `hasSessionData`, fire-and-forget deletes legacy empty docs, returns
-  first 60 active sessions + `mongoConnected: true`.
+  data via `hasSessionData`, awaits deletion of legacy empty docs (failures
+  warn instead of retrying silently), returns first 60 active sessions +
+  `mongoConnected: true`.
 
 ### `app/api/status/route.js`
 DB health probe.
@@ -91,7 +89,18 @@ Workout program data + builders. Purpose: static 4-day program + emptiness check
 
 ### `a.html` (~50 KB, no functions)
 Standalone static prototype of the tracker (predates the Next.js app). Purpose:
-legacy reference only — not served by the app; drift risk if edited.
+legacy reference only — not served by the app; carries a DEPRECATED header
+(2026-09-26), do not edit.
+
+### `lib/session-format.js` (2026-09-26)
+Pure session-formatting helpers extracted from `app/page.js` for testability.
+- `formatSessionAsText(session, program)` — renders a session as shareable text.
+- `getDefaultReps(target)` — midpoint of a `"8–12"` range (or single number) for
+  ghost/rep placeholders.
+
+### `tests/workout.test.js` (2026-09-26)
+Vitest suite (7 tests) for `hasSessionData`, `getDefaultReps`, `formatSessionAsText`.
+Run via `npm test`.
 
 ### `.env.example`
 Example env file (tracked; `.gitignore` un-ignores it). No functions.
