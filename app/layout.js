@@ -1,4 +1,5 @@
 import "./globals.css";
+import ManagerProvider from "@/lib/manager/ManagerProvider";
 
 export const metadata = {
   title: "Lean Athletic Workout Tracker",
@@ -14,7 +15,10 @@ export const viewport = {
 export default function RootLayout({ children }) {
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body>
+        <ManagerProvider />
+        {children}
+      </body>
     </html>
   );
 }

@@ -2,6 +2,8 @@
 
 ## 🔴 Vulnerabilities
 
+- (2026-09-28) **Manager-side, blocks browser analytics — reported, not fixable here.** The Manager deployment sends `Cross-Origin-Resource-Policy: same-origin` on **every** route, including the analytics tracker at `/t.js`. CORP `same-origin` is exactly what a browser uses to refuse a cross-origin `<script src>` load, so the injected tracker tag never executes from any app on a different origin: the tag is present in the DOM but `window.__mgrLoaded` stays `false` and no pageview is ever sent. Confirmed causally — two byte-identical copies of `t.js` served from two local ports, differing only in that header: the CORP copy raised `onerror`, the other loaded and booted (`__mgrLoaded=true`, POST accepted). A second, independent Manager behaviour compounds it: `isBot()` in `Manager/lib/visitor.ts` matches `/headless/i`, so headless-Chrome pageviews are accepted by the endpoint and then dropped as `{"accepted":0,"bots":1}`. With a normal Chrome UA and a CORP-free tracker, a real headless pageview **does** land (pageviews 1 → 2, `topPages` gains the page). Fix belongs in Manager: exempt `/t.js` from CORP (it already sends `Access-Control-Allow-Origin: *` and the tracker is public by design) and decide deliberately whether `headless` should stay in the bot pattern. Nothing in this repo can work around either; server-side log delivery is unaffected.
+
 - (2026-09-28) **NoSQL operator injection on `/api/session` — FIXED.** `date` and `day`
   were taken straight from the query string and the JSON body and used as raw Mongo
   filters, so `{"date":{"$ne":null},"day":"day1","items":{}}` turned `deleteOne` into
@@ -99,6 +101,8 @@
   states plainly that the API is unauthenticated and must be gated before any public deploy.
 
 ## 🟡 New Features
+
+- (2026-09-28) **SHIPPED — optional Manager integration (centralized logging + analytics).** `lib/manager/{index.js,logger.js,ManagerProvider.jsx}`, `scripts/{check-manager-integration,measure-log-delivery}.mjs` (`npm run manager:check`), 14 new vitest cases in `tests/manager-integration.test.js`, `.env.example` block, and a `connect-src` extension in `next.config.mjs` that is applied **only** when `NEXT_PUBLIC_MANAGER_ENDPOINT` is set (verified byte-identical to the previous policy when it is not). Server logs now come from every rejection and 500 path in `/api/session` and `/api/history` plus a failed `client.connect()` in `lib/mongodb.js`; the browser SDK captures console/crash/fetch failures; a client-side tracker tag reports pageviews. A no-op without env vars, so local dev, CI and previews are untouched. Delivery profile 201/200 delivered, 0 dropped, 11 requests, 18.3 entries/request at 214 logs/s. The browser half deliberately reads a separate `NEXT_PUBLIC_MANAGER_*` block through static `process.env.NEXT_PUBLIC_*` member expressions — a `'use client'` module cannot see `MANAGER_*` at all and would fail silently while the tests still passed. A test reads the facade source so that cannot regress. This repo vendors the SDK as `?format=js` (plain JavaScript, `jsconfig` with `checkJs: false`) rather than the TypeScript build, and the facade imports it as `"./logger.js"`, so the measure script needs no bundler at all.
 
 - (2026-09-28) Consider an explicit "export includes unmapped exercises" flow: logged data for
   an exercise removed from the program is kept in storage and flagged, but the only way to see

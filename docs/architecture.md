@@ -63,9 +63,12 @@ export, debounced auto-save (localStorage + `POST /api/session`).
     weight placeholder, the ghost chip and the text export.
   - Item identity is `item.key` (`${dayId}:${slug}`), never a positional index.
 
-### `app/layout.js` (20 lines)
-Root layout + metadata. Purpose: html shell, title/description, mobile viewport.
-- `RootLayout({ children })` — renders `<html lang="en"><body>{children}</body></html>`.
+### `app/layout.js` (27 lines)
+Root layout + metadata. Purpose: html shell, title/description, mobile viewport, and
+(2026-09-28) the optional `<ManagerProvider />`.
+- `RootLayout({ children })` — renders `<html lang="en"><body><ManagerProvider />{children}</body></html>`.
+  `ManagerProvider` renders `null`; it starts the Manager browser logger and injects the
+  analytics `<script>` only when `managerClientConfig.enabled`.
 - Exports `metadata` (title/description) and `viewport` (device-width, themeColor).
 
 ### `app/globals.css` (1308 lines, no functions)
@@ -87,6 +90,12 @@ localStorage as the source of truth).
   `validateSessionPayload` (400 `INVALID_ITEMS` / `INVALID_PROGRAM_VERSION`); the filter is
   built only from the validated strings. Deletes the doc when `hasSessionData(items)` is
   false, else upserts `{ date, day, items, updatedAt, programVersion }`.
+- **2026-09-28 (Manager, optional).** Every rejection and both 500 paths now also emit
+  through the facade in `lib/manager/index.js`, next to the response they already return:
+  a rejected `?date=`/`?day=` → `managerLog("warn", "session_query_rejected", { code, method: "GET" })`,
+  a rejected body → `session_body_rejected`, a rejected payload → `session_payload_rejected`,
+  and the two `catch` blocks → `logServerError("session_read_failed" | "session_write_failed")`.
+  No behavioural change: with no `MANAGER_*` env vars the facade is a no-op.
 
 ### `app/api/history/route.js` (73 lines)
 History feed. Offline fallback: `{ sessions: [], mongoConnected: false }`.
@@ -96,6 +105,8 @@ History feed. Offline fallback: `{ sessions: [], mongoConnected: false }`.
 - `GET()` — `find(ACTIVE_FILTER)` sorted `{ date: -1, day: 1 }` (stable for same-day ties),
   limit 100; each session is passed through `migrateItems` so history is keyed by current
   slugs; returns the first 60 active sessions with `unmappedItems` flagged.
+- **2026-09-28 (Manager, optional).** The `catch` also calls
+  `logServerError("history_read_failed", err)`.
 
 ### `app/api/status/route.js` (6 lines)
 DB health probe.
@@ -110,6 +121,9 @@ Mongo connection + indexes + status. Purpose: lazy singleton client, `workout_tr
 - `getDatabase()` — returns `Db` or `null` when `MONGODB_URI` is unset/blank or connect fails
   (resets `clientPromise`/`indexesPromise` so later calls retry); awaits `ensureIndexes`.
 - `checkMongoStatus()` — `{ configured, connected }` only; logs the reason server-side.
+- **2026-09-28 (Manager, optional).** A failed `client.connect()` also calls
+  `logServerError("mongodb_connect_failed", err)`, so an unreachable database reaches the
+  central log viewer with the real driver error instead of only a console line.
 
 ### `lib/validate.js` (254 lines, no React)
 Shared request/payload validation. Every value the server stores is whitelist-constructed
@@ -184,6 +198,52 @@ every new validator: date/day/item-key rejection (including `{"$ne":null}`), que
 injection, item shape and numeric bounds, oversize/malformed JSON bodies, and the
 cache merge/prune rules.
 
+### `tests/manager-integration.test.js` (added 2026-09-28, 14 tests)
+Vitest suite for the Manager facade, picked up by the single runner `npm test`. The facade reads
+its environment at module load, so every case re-imports it after `vi.resetModules()`. Covers:
+disabled-when-unconfigured no-ops across every entry point; server enablement; the analytics key
+alone never enabling logs; whitespace-only values treated as unconfigured; **the server block
+never enabling the client half**; the client half enabling itself from `NEXT_PUBLIC_*` alone; the
+tracker tag's shape; the tracker omitted without a client analytics key; a **static-access guard**
+that reads `lib/manager/index.js` and fails if any `NEXT_PUBLIC_*` value stops being a literal
+`process.env.X` member expression (bracket notation fails too) or if the client block starts
+indexing `process.env`; `managerLog` never throwing at any level; info riding the 250ms window
+while `error` leading-edge flushes with the 100ms floor; unknown levels falling back to `info`;
+`getManagerDroppedCount`; `globalThis` instance sharing; and the real SDK surface.
+
+### `lib/manager/` (added 2026-09-28) — Manager integration (OPTIONAL)
+
+Centralized logging + analytics. **Entirely optional**: with no `MANAGER_*` variables the whole
+thing is a set of no-ops, so local dev, CI and previews are unaffected. This app has no logging
+layer of its own, so the facade is the single entry point — the API routes and `lib/mongodb.js`
+call `logServerEvent`/`logServerError`/`managerLog` directly, next to the `console.error` they
+already emitted.
+
+| File | Purpose | Exports |
+|---|---|---|
+| `lib/manager/logger.js` | The vendored `@manager/logger` SDK: one file, zero dependencies. Refreshed with `curl -H "x-manager-key: …" "…/api/sdk/logger?format=js"`. Do not hand-edit. This repo is plain JavaScript, hence the `?format=js` build of the SDK (the TypeScript repos vendor `?format=ts`). | `initLogger`, `traceIdFromHeaders`, `shutdownLoggers`, `fingerprint`, `LOG_SDK_VERSION`, `LOG_SDK_PATH`, `TRACE_HEADER` |
+| `lib/manager/index.js` | The integration facade. Reads the server `MANAGER_*` block into `managerConfig` and — separately, and this is the point — the `NEXT_PUBLIC_MANAGER_*` block into `managerClientConfig` using **static** `process.env.NEXT_PUBLIC_*` member expressions, because Next.js strips non-public env from the client bundle. Exposes a no-op logger when unconfigured, creates the real logger lazily on first use and caches it on `globalThis`, batches routine levels on a 250ms window and leading-edge-flushes `error`/`fatal`. Never throws. Imports the SDK as `"./logger.js"` so plain Node can load the facade outside the bundler (no bundler needed anywhere in this repo). | `managerConfig`, `managerClientConfig`, `startManagerLogger`, `getManagerLogger`, `managerLog`, `getManagerDroppedCount`, `logServerEvent`, `logServerError`, `managerTrackerScript` |
+| `lib/manager/ManagerProvider.jsx` | `'use client'` component mounted in `app/layout.js`. Starts the browser logger and injects the analytics `<script>` once, guarded against double injection. Gated on `managerClientConfig.enabled`, **not** `managerConfig.enabled`. | `ManagerProvider` (default) |
+| `scripts/check-manager-integration.mjs` | `npm run manager:check` — live check against a running Manager: the server key, client key and analytics key are each accepted on the right endpoint, each wrong key kind is refused, and this app's own rejection paths are exercised (`GET /api/session?date=nope` → 400, `POST /api/session` with a malformed body → 400, `GET /api/status` → 200). | — |
+| `scripts/measure-log-delivery.mjs` | `node scripts/measure-log-delivery.mjs [count]` — fires N entries at the facade, counts the ingest requests that actually land, reports latency, entries/request and SDK drops. | — |
+
+**Delivery profile.** Routine levels ride the SDK's own 250ms `flushIntervalMs` window, so a burst
+of N lines becomes one HTTP request rather than N. `error`/`fatal` skip the window via
+`scheduleUrgentFlush` (leading edge): flush now if `URGENT_FLUSH_MIN_GAP_MS` (100ms) has passed,
+otherwise arm a single trailing flush — a burst of 50 errors costs ~2 requests, not 50. Measured
+with `node scripts/measure-log-delivery.mjs 200`: **201/200 entries delivered, 0 dropped, 11
+requests, 18.3 entries/request at 214 logs/s**. (Flushing per entry instead measures ~96/200
+delivered with 105 dropped across 20 requests — one HTTP request per line.)
+
+**Design points.**
+- The logger is created on first use, not at boot: Next.js compiles startup hooks and route
+  handlers into separate module graphs, so a boot-created instance is not the object a request sees.
+- `captureProcessErrors` is intentionally **off** — Next.js owns process error handling, and extra
+  process listeners stop log delivery entirely.
+- No bundler is required. The TypeScript reference repos need a `module.registerHooks` resolve
+  hook (or esbuild) in the measure script because their facade is TypeScript; here the facade is
+  plain ESM with an explicit `"./logger.js"` import, so Node imports it directly.
+
 ### `vitest.config.mjs` (17 lines)
 Vitest config: `@` → repo root alias (so `lib/*` modules resolve their `@/lib/...` imports),
 `environment: "node"`, `include: ["tests/**/*.test.js"]`.
@@ -194,6 +254,12 @@ Security headers on every route via `headers()`: `Content-Security-Policy` (no
 scripts, `ws:` connect only in dev), `X-Frame-Options: DENY`,
 `X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin`,
 `Permissions-Policy: camera=(), microphone=(), geolocation=()`.
+- **2026-09-28:** `connect-src` gains `NEXT_PUBLIC_MANAGER_ENDPOINT` **when it is set**, because
+  the Manager browser logger and the analytics tracker both need to reach that origin and
+  `connect-src 'self'` alone would block them silently. Unset, the assembled policy is
+  **byte-identical** to the previous one (asserted in verification below), so the integration
+  stays a true no-op when it is not configured. No `script-src` change is needed — the tracker
+  tag is inserted by script and `script-src` already allows `'self'` + the inline bootstrap.
 
 ### `eslint.config.mjs` (24 lines)
 Flat config from `eslint-config-next/core-web-vitals`, with `globalIgnores` for `.next`,
@@ -204,7 +270,10 @@ SSR. Run via `npm run lint`.
 
 ### `.env.example`
 Example env file (tracked; `.gitignore` un-ignores it). No functions.
-Declares `MONGODB_URI=mongodb://localhost:27017/workout_tracker`.
+Declares `MONGODB_URI=mongodb://localhost:27017/workout_tracker`, plus (2026-09-28) the optional
+Manager block: `MANAGER_ENDPOINT`, `MANAGER_APP_ID`, `MANAGER_LOG_KEY`, `MANAGER_ANALYTICS_KEY`,
+`MANAGER_LOG_SOURCE` and the four `NEXT_PUBLIC_MANAGER_*` values. Every key line is blank — no
+credential value is ever committed.
 
 ### `.gitignore`
 Ignores `node_modules`, `.next`, `.env*` (except `!.env.example`), `.DS_Store`.
@@ -235,10 +304,58 @@ React app cannot render.
 |---|---|---|---|
 | `MONGODB_URI` | No — app works fully offline on localStorage without it | Mongo connection string (`workout_tracker` db); enables cloud sync + history | `lib/mongodb.js` (`getDatabase`, `checkMongoStatus`, `ensureIndexes`), `.env.example`, surfaced in `app/page.js` offline banner and `app/api/session/route.js` local-save message |
 
-Verified via grep: `MONGODB_URI` is the only `process.env` var in the codebase.
+### Manager (centralized logging + analytics) — OPTIONAL, all nine default to unset
+
+Nothing in this group is required. With all of them unset the integration is a set of no-ops, so
+local dev, CI and previews behave exactly as before. The full annotated block is in
+`.env.example`; `.env.local` carries the real values and is git-ignored.
+
+**Server half** — read only by Node-side code (route handlers, `lib/mongodb.js`).
+`MANAGER_ENDPOINT` is the base URL of the **Manager** deployment, *not* this app's own port (a
+local Manager is `http://127.0.0.1:3300`); pointing it at the app's own port makes every log POST
+fail silently.
+
+| Var | Required? | Purpose | Referenced in |
+|---|---|---|---|
+| `MANAGER_ENDPOINT` | Optional | Base URL of the **Manager** deployment. Endpoint + app id + log key must all be present before the integration enables itself. | `lib/manager/index.js` → `managerConfig` |
+| `MANAGER_APP_ID` | Optional | Project slug in Manager (`workout`). | `lib/manager/index.js` → `managerConfig` |
+| `MANAGER_LOG_KEY` | Optional | Project log key — `mlk_…` for the server. Verified absent from the built client bundle. | `lib/manager/index.js` → `managerConfig` |
+| `MANAGER_ANALYTICS_KEY` | Optional | Analytics key (`mak_…`). Without it logs still work but no analytics tag is injected. | `lib/manager/index.js` → `managerConfig.analyticsKey` |
+| `MANAGER_LOG_SOURCE` | Optional | `server` (default) or `client`. Inferred when omitted. | `lib/manager/index.js` → `SOURCE` |
+
+**Client half** — required for *any* browser logging or analytics, because Next.js inlines only a
+literal `process.env.NEXT_PUBLIC_FOO` member expression into the client bundle. `process.env` is an
+empty object in browser code and a dynamic `process.env[name]` lookup is not inlined either, so a
+`'use client'` module reading `MANAGER_*` is silently dead. Every value below is written out
+statically in `lib/manager/index.js` and guarded by a test that reads the facade source.
+
+| Var | Required? | Purpose | Referenced in |
+|---|---|---|---|
+| `NEXT_PUBLIC_MANAGER_ENDPOINT` | Optional (needed for browser half) | Same value as `MANAGER_ENDPOINT`. Also read by `next.config.mjs` to extend the CSP's `connect-src` — but only when set. | `lib/manager/index.js` → `CLIENT_ENDPOINT`; `next.config.mjs` → `managerOrigin` |
+| `NEXT_PUBLIC_MANAGER_APP_ID` | Optional (needed for browser half) | Same value as `MANAGER_APP_ID`. | `lib/manager/index.js` → `CLIENT_APP_ID` |
+| `NEXT_PUBLIC_MANAGER_CLIENT_KEY` | Optional (needed for browser logs) | The project's **client** key (`mck_…`), not the server key: Manager derives each entry's `source` from the key kind. | `lib/manager/index.js` → `CLIENT_LOG_KEY` |
+| `NEXT_PUBLIC_MANAGER_ANALYTICS_KEY` | Optional (needed for analytics) | `mak_…` analytics key. | `lib/manager/index.js` → `CLIENT_ANALYTICS_KEY` |
+
+Verified against the production bundle: the four `NEXT_PUBLIC_*` values appear as string literals in
+`.next/static/chunks/0derzykp13j8r.js`, `MANAGER_LOG_KEY` appears nowhere in `.next/static`, and the
+server `env()` helper survives as a dead dynamic index (`env("MANAGER_ENDPOINT")`) the browser can
+never resolve — harmless, because `ManagerProvider` gates on `managerClientConfig.enabled` and never
+reads `managerConfig`.
+
 No auth/permission env vars (no auth system).
 
 ## Verification
 
-`npm run lint` (0 errors, 0 warnings) · `npm test` (56 tests) · `npm run typecheck` ·
-`npm run build` — all from the repo root.
+`npm run lint` (0 errors, 0 warnings) · `npm test` (70 tests: 56 existing + 14 Manager) ·
+`npm run typecheck` · `npm run build` · `npm run manager:check` (9 checks) ·
+`node scripts/measure-log-delivery.mjs 200` — all from the repo root.
+
+Manager integration verified end to end against a running Manager on :3603:
+- `GET /api/session?date=nope&day=day1` → 400, lands as `level=warn source=server keyPrefix=mlk_SAA`
+  with `code=INVALID_DATE`, ~1s after the request.
+- `POST /api/session` with `{not json` → 400, lands as `level=warn … code=INVALID_JSON`.
+- With `MONGODB_URI` pointed at a closed port, `GET /api/history` lands as
+  `level=error … message=mongodb_connect_failed` carrying the real
+  `MongoServerSelectionError: connect ECONNREFUSED` — delivered through the leading-edge flush.
+- CSP asserted byte-identical when Manager is unset:
+  `prodUnset === preChangePolicy` → `true`.

@@ -1,4 +1,5 @@
 import { getDatabase } from "@/lib/mongodb";
+import { logServerError, managerLog } from "@/lib/manager";
 import { hasSessionData } from "@/lib/program";
 import {
   ERROR_CODES,
@@ -18,6 +19,9 @@ export async function GET(request) {
   const { searchParams } = new URL(request.url);
   const query = validateSessionQuery(searchParams);
   if (!query.ok) {
+    // A rejected read is the app's own client-error path: reachable with no
+    // credentials, and previously invisible to anything but the response.
+    managerLog("warn", "session_query_rejected", { code: query.code, method: "GET" });
     return errorResponse(query.code, 400);
   }
   const { date, day } = query;
@@ -44,6 +48,7 @@ export async function GET(request) {
     });
   } catch (err) {
     console.error("GET /api/session error:", err);
+    logServerError("session_read_failed", err, { method: "GET" });
     return errorResponse(ERROR_CODES.INTERNAL, 500, { mongoConnected: false });
   }
 }
@@ -52,11 +57,13 @@ export async function POST(request) {
   const read = await readJsonBody(request);
   if (!read.ok) {
     const status = read.code === ERROR_CODES.PAYLOAD_TOO_LARGE ? 413 : 400;
+    managerLog("warn", "session_body_rejected", { code: read.code, method: "POST" });
     return errorResponse(read.code, status);
   }
 
   const payload = validateSessionPayload(read.body);
   if (!payload.ok) {
+    managerLog("warn", "session_payload_rejected", { code: payload.code, method: "POST" });
     return errorResponse(payload.code, 400);
   }
   const { date, day, items, programVersion } = payload;
@@ -96,6 +103,7 @@ export async function POST(request) {
     return Response.json({ success: true, mongoConnected: true });
   } catch (err) {
     console.error("POST /api/session error:", err);
+    logServerError("session_write_failed", err, { method: "POST" });
     return errorResponse(ERROR_CODES.INTERNAL, 500, { mongoConnected: false });
   }
 }

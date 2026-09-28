@@ -1,4 +1,5 @@
 import { getDatabase } from "@/lib/mongodb";
+import { logServerError } from "@/lib/manager";
 import { hasSessionData, migrateItems } from "@/lib/program";
 import { ERROR_CODES } from "@/lib/validate";
 
@@ -65,6 +66,7 @@ export async function GET() {
     return Response.json({ sessions, mongoConnected: true });
   } catch (err) {
     console.error("GET /api/history error:", err);
+    logServerError("history_read_failed", err);
     return Response.json(
       { sessions: [], mongoConnected: false, code: ERROR_CODES.INTERNAL },
       { status: 500 }

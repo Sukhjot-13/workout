@@ -9,7 +9,8 @@
     "start": "next start",
     "lint": "eslint .",
     "typecheck": "tsc -p jsconfig.json",
-    "test": "vitest run"
+    "test": "vitest run",
+    "manager:check": "node scripts/check-manager-integration.mjs"
   },
   "dependencies": {
     "mongodb": "^7.6.0",
