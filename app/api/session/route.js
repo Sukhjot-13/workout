@@ -1,23 +1,34 @@
 import { getDatabase } from "@/lib/mongodb";
 import { hasSessionData } from "@/lib/program";
+import {
+  ERROR_CODES,
+  readJsonBody,
+  validateSessionPayload,
+  validateSessionQuery,
+} from "@/lib/validate";
+
+function errorResponse(code, status, extra = {}) {
+  return Response.json(
+    { error: "Request rejected", code, ...extra },
+    { status }
+  );
+}
 
 export async function GET(request) {
   const { searchParams } = new URL(request.url);
-  const date = searchParams.get("date");
-  const day = searchParams.get("day");
-
-  if (!date || !day) {
-    return Response.json(
-      { error: "Missing date or day query parameter" },
-      { status: 400 }
-    );
+  const query = validateSessionQuery(searchParams);
+  if (!query.ok) {
+    return errorResponse(query.code, 400);
   }
+  const { date, day } = query;
 
   try {
     const db = await getDatabase();
     if (!db) {
       return Response.json({
         items: {},
+        updatedAt: null,
+        programVersion: null,
         source: "local-only",
         mongoConnected: false,
       });
@@ -27,35 +38,36 @@ export async function GET(request) {
     return Response.json({
       items: session?.items || {},
       updatedAt: session?.updatedAt || null,
+      programVersion: session?.programVersion ?? null,
       source: "mongodb",
       mongoConnected: true,
     });
   } catch (err) {
     console.error("GET /api/session error:", err);
-    return Response.json(
-      { error: err.message, mongoConnected: false },
-      { status: 500 }
-    );
+    return errorResponse(ERROR_CODES.INTERNAL, 500, { mongoConnected: false });
   }
 }
 
 export async function POST(request) {
+  const read = await readJsonBody(request);
+  if (!read.ok) {
+    const status = read.code === ERROR_CODES.PAYLOAD_TOO_LARGE ? 413 : 400;
+    return errorResponse(read.code, status);
+  }
+
+  const payload = validateSessionPayload(read.body);
+  if (!payload.ok) {
+    return errorResponse(payload.code, 400);
+  }
+  const { date, day, items, programVersion } = payload;
+
   try {
-    const body = await request.json();
-    const { date, day, items } = body;
-
-    if (!date || !day) {
-      return Response.json(
-        { error: "Missing date or day in payload" },
-        { status: 400 }
-      );
-    }
-
     const db = await getDatabase();
     if (!db) {
       return Response.json({
         success: false,
         mongoConnected: false,
+        code: ERROR_CODES.NOT_FOUND,
         message: "MONGODB_URI not configured or unreachable. Saved locally.",
       });
     }
@@ -73,8 +85,9 @@ export async function POST(request) {
         $set: {
           date,
           day,
-          items: items || {},
+          items,
           updatedAt: new Date(),
+          programVersion: programVersion ?? null,
         },
       },
       { upsert: true }
@@ -83,9 +96,6 @@ export async function POST(request) {
     return Response.json({ success: true, mongoConnected: true });
   } catch (err) {
     console.error("POST /api/session error:", err);
-    return Response.json(
-      { error: err.message, mongoConnected: false },
-      { status: 500 }
-    );
+    return errorResponse(ERROR_CODES.INTERNAL, 500, { mongoConnected: false });
   }
 }

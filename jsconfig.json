@@ -3,6 +3,12 @@
     "baseUrl": ".",
     "paths": {
       "@/*": ["./*"]
-    }
-  }
+    },
+    "allowJs": true,
+    "checkJs": false,
+    "noEmit": true,
+    "skipLibCheck": true
+  },
+  "include": ["app/**/*.js", "lib/**/*.js", "tests/**/*.js", "*.mjs"],
+  "exclude": ["node_modules", ".next"]
 }

@@ -1,8 +1,30 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback, useMemo } from "react";
-import { PROGRAM, hasSessionData } from "@/lib/program";
-import { formatSessionAsText, getDefaultReps } from "@/lib/session-format";
+import { useState, useEffect, useRef, useCallback } from "react";
+import { PROGRAM, PROGRAM_VERSION, hasSessionData, migrateItems } from "@/lib/program";
+import {
+  WEIGHT_UNITS,
+  formatRepsValue,
+  formatSessionAsText,
+  formatWeightValue,
+  getDefaultReps,
+  normalizeWeightUnit,
+  repsUnitLabel,
+} from "@/lib/session-format";
+import {
+  MAX_CACHED_SESSIONS,
+  buildSessionEntry,
+  pickNewerSession,
+  readCache,
+  readSessionEntry,
+  sessionKeyFor,
+  writeCache,
+} from "@/lib/session-cache";
+import { coerceNumberInput } from "@/lib/validate";
+
+const SAVE_DEBOUNCE_MS = 500;
+const WEIGHT_UNIT_STORAGE_KEY = "workout_tracker_weight_unit";
+const MAX_CUSTOM_SET_COUNT = 20;
 
 // ─── Export Utilities ────────────────────────────────────────────────────────
 
@@ -18,11 +40,23 @@ function downloadFile(content, filename, mimeType) {
 
 // ─── Export Modal Component ───────────────────────────────────────────────────
 
-function ExportModal({ onClose, currentSession, historyList, program }) {
+function ExportModal({ onClose, currentSession, historyList, program, weightUnit }) {
   const [scope, setScope] = useState("current");
   const [format, setFormat] = useState("text");
+  const dialogRef = useRef(null);
+
+  useEffect(() => {
+    const node = dialogRef.current;
+    if (node) node.focus();
+    function handleKeyDown(event) {
+      if (event.key === "Escape") onClose();
+    }
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [onClose]);
 
   const hasHistory = historyList && historyList.length > 0;
+  const exportOptions = { weightUnit };
 
   function handleExport() {
     if (format === "json") {
@@ -36,11 +70,11 @@ function ExportModal({ onClose, currentSession, historyList, program }) {
     } else {
       // text format
       if (scope === "current") {
-        const text = formatSessionAsText(currentSession, program);
+        const text = formatSessionAsText(currentSession, program, exportOptions);
         downloadFile(text, `workout-${currentSession.date}-${currentSession.day}.txt`, "text/plain");
       } else {
         const parts = historyList
-          .map((s) => formatSessionAsText(s, program))
+          .map((s) => formatSessionAsText(s, program, exportOptions))
           .filter(Boolean)
           .join("\n\n" + "─".repeat(40) + "\n\n");
         downloadFile(parts, `workout-history.txt`, "text/plain");
@@ -51,7 +85,14 @@ function ExportModal({ onClose, currentSession, historyList, program }) {
 
   return (
     <div className="export-overlay" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="export-modal" role="dialog" aria-modal="true" aria-labelledby="export-modal-title">
+      <div
+        className="export-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="export-modal-title"
+        tabIndex={-1}
+        ref={dialogRef}
+      >
         <div className="export-modal-header">
           <p className="export-modal-title" id="export-modal-title">Export Workouts</p>
           <button className="export-modal-close" onClick={onClose} aria-label="Close export">
@@ -109,8 +150,6 @@ function ExportModal({ onClose, currentSession, historyList, program }) {
   );
 }
 
-const STORAGE_KEY = "workout_tracker_local_cache";
-
 function getLocalDateString() {
   const d = new Date();
   const y = d.getFullYear();
@@ -132,24 +171,157 @@ function triggerHaptic(type = "light") {
   } catch (e) {}
 }
 
+function describeMigration(migrated) {
+  const parts = [];
+  if (migrated.rekeyed) {
+    parts.push("Your logged sets were re-attached to the current exercise list.");
+  }
+  if (migrated.unmapped.length > 0) {
+    parts.push(
+      `${migrated.unmapped.length} logged entr${migrated.unmapped.length === 1 ? "y is" : "ies are"} for exercises that are no longer in this program. The data is kept but is not shown below — check the export if you need it.`
+    );
+  }
+  return parts.join(" ");
+}
+
+// Runs after mount only: reading localStorage during render would give the
+// server and the client different answers and produce ghost chips and
+// placeholders that exist in the browser HTML but not in the server HTML.
+function findPreviousSession(allPastSessions, selectedDay, selectedDate) {
+  if (typeof window === "undefined" || !selectedDate) return null;
+
+  if (Array.isArray(allPastSessions)) {
+    const match = allPastSessions.find(
+      (s) => s.day === selectedDay && s.date < selectedDate && hasSessionData(s.items)
+    );
+    if (match) return match;
+  }
+
+  const cached = readCache();
+  const list = Object.entries(cached)
+    .map(([key, entry]) => {
+      const [date, day] = key.split("|");
+      return { date, day, ...readSessionEntry(entry, day) };
+    })
+    .filter((s) => s.day === selectedDay && s.date < selectedDate && hasSessionData(s.items))
+    .sort((a, b) => b.date.localeCompare(a.date));
+  return list.length > 0 ? list[0] : null;
+}
+
+// ─── Debounced session sync ─────────────────────────────────────────────────
+// One pending-save record per `${date}|${day}`. Keeping the queue outside React
+// means a save can be flushed from a debounce timer, a `pagehide` handler or
+// the load effect without reading a ref from render scope, and it guarantees
+// switching day/date flushes the outgoing session instead of dropping it.
+const saveQueue = {
+  pending: new Map(),
+  timers: new Map(),
+  activeKey: null,
+};
+
+const syncCallbacks = {
+  setSyncStatus: null,
+  setMongoStatus: null,
+};
+
+function setSyncStatusSafe(value) {
+  if (syncCallbacks.setSyncStatus) syncCallbacks.setSyncStatus(value);
+}
+
+function setMongoConnectedSafe() {
+  if (syncCallbacks.setMongoStatus) {
+    syncCallbacks.setMongoStatus((prev) => ({ ...prev, connected: true, configured: true }));
+  }
+}
+
+function postSession(payload, keepalive) {
+  const key = sessionKeyFor(payload.date, payload.day);
+  return fetch("/api/session", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+    keepalive,
+  })
+    .then(async (res) => {
+      if (!res.ok) {
+        if (saveQueue.activeKey === key) setSyncStatusSafe("error");
+        return;
+      }
+      const result = await res.json();
+      if (result.mongoConnected) {
+        setMongoConnectedSafe();
+        if (saveQueue.activeKey === key) setSyncStatusSafe("synced");
+      } else if (saveQueue.activeKey === key) {
+        setSyncStatusSafe("local");
+      }
+    })
+    .catch(() => {
+      if (saveQueue.activeKey === key) setSyncStatusSafe("error");
+    });
+}
+
+function flushPendingSave(key, keepalive = false) {
+  const timer = saveQueue.timers.get(key);
+  if (timer !== undefined) {
+    clearTimeout(timer);
+    saveQueue.timers.delete(key);
+  }
+  const pending = saveQueue.pending.get(key);
+  if (!pending) return;
+  saveQueue.pending.delete(key);
+  postSession(pending, keepalive);
+}
+
+function queueSessionSave(date, day, items) {
+  const key = sessionKeyFor(date, day);
+  saveQueue.pending.set(key, { date, day, items, programVersion: PROGRAM_VERSION });
+  const existing = saveQueue.timers.get(key);
+  if (existing !== undefined) clearTimeout(existing);
+  saveQueue.timers.set(key, setTimeout(() => flushPendingSave(key), SAVE_DEBOUNCE_MS));
+}
+
+function flushAllPendingSaves() {
+  Array.from(saveQueue.pending.keys()).forEach((key) => flushPendingSave(key, true));
+}
+
+
 export default function WorkoutPage() {
   const [selectedDay, setSelectedDay] = useState("day1");
-  const [selectedDate, setSelectedDate] = useState(getLocalDateString());
+  // Empty on the server and on the first client render, then filled in after
+  // mount: a UTC server date would otherwise hydrate east-of-UTC users into
+  // yesterday's session.
+  const [selectedDate, setSelectedDate] = useState("");
   const [items, setItems] = useState({});
-  const [syncStatus, setSyncStatus] = useState("synced"); // "synced" | "saving" | "local"
+  // "synced" | "saving" | "local" | "error"
+  const [syncStatus, setSyncStatus] = useState("synced");
   const [mongoStatus, setMongoStatus] = useState({ configured: false, connected: false });
   const [showHistory, setShowHistory] = useState(false);
   const [historyList, setHistoryList] = useState([]);
   const [showExport, setShowExport] = useState(false);
   const [allPastSessions, setAllPastSessions] = useState([]);
+  const [previousSession, setPreviousSession] = useState(null);
   const [collapsedSections, setCollapsedSections] = useState({});
-  const saveTimeoutRef = useRef(null);
-  // Mirror of `items` for updateItem: lets us compute the next state from
-  // the latest committed value without putting side effects (save, collapse
-  // timers) inside a setState updater, which React may invoke twice in
-  // StrictMode and which must stay pure.
-  const itemsRef = useRef(items);
-  itemsRef.current = items;
+  const [weightUnit, setWeightUnit] = useState("kg");
+  const [toast, setToast] = useState(null);
+  const [migrationWarning, setMigrationWarning] = useState(null);
+  const showToast = useCallback((message, tone = "warn") => {
+    setToast({ message, tone, id: Date.now() });
+  }, []);
+
+  useEffect(() => {
+    if (!toast) return undefined;
+    const timer = setTimeout(() => setToast(null), 6000);
+    return () => clearTimeout(timer);
+  }, [toast]);
+
+  useEffect(() => {
+    syncCallbacks.setSyncStatus = setSyncStatus;
+    syncCallbacks.setMongoStatus = setMongoStatus;
+    return () => {
+      syncCallbacks.setSyncStatus = null;
+      syncCallbacks.setMongoStatus = null;
+    };
+  }, []);
 
   // Check MongoDB connection status
   const checkStatus = useCallback(async () => {
@@ -170,49 +342,97 @@ export default function WorkoutPage() {
     return () => clearInterval(interval);
   }, [checkStatus]);
 
+  // Local-only bootstrap: the date and the weight unit are both
+  // browser-local, so they are resolved after mount rather than during render.
+  useEffect(() => {
+    setSelectedDate(getLocalDateString());
+    try {
+      const stored = globalThis.localStorage?.getItem(WEIGHT_UNIT_STORAGE_KEY);
+      if (stored) setWeightUnit(normalizeWeightUnit(stored));
+    } catch (err) {
+      console.warn("Error reading weight unit preference:", err);
+    }
+  }, []);
+
+  // Never lose an unsaved session to a tab close or bfcache eviction.
+  useEffect(() => {
+    window.addEventListener("beforeunload", flushAllPendingSaves);
+    window.addEventListener("pagehide", flushAllPendingSaves);
+    return () => {
+      window.removeEventListener("beforeunload", flushAllPendingSaves);
+      window.removeEventListener("pagehide", flushAllPendingSaves);
+    };
+  }, []);
+
   // Load session when date or day changes
   useEffect(() => {
-    const sessionKey = `${selectedDate}|${selectedDay}`;
-    // 1. Instant load from local storage
-    let localItems = {};
-    try {
-      const cached = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
-      if (cached && cached[sessionKey]) {
-        localItems = cached[sessionKey];
-      }
-    } catch (e) {
-      console.warn("Error reading localStorage:", e);
+    if (!selectedDate) return undefined;
+
+    const sessionKey = sessionKeyFor(selectedDate, selectedDay);
+    const previousKey = saveQueue.activeKey;
+    saveQueue.activeKey = sessionKey;
+    if (previousKey && previousKey !== sessionKey) {
+      // Flush — never discard — the outgoing session's pending save.
+      flushPendingSave(previousKey);
     }
-    setItems(localItems);
+
+    // 1. Instant load from local storage
+    const cached = readCache();
+    const local = readSessionEntry(cached[sessionKey], selectedDay);
+    const localEntry = {
+      items: local.items,
+      updatedAt: local.updatedAt,
+      programVersion: local.programVersion,
+    };
+    if (local.rekeyed || local.unmapped.length > 0) {
+      setMigrationWarning(describeMigration(local));
+    }
+    setItems(local.items);
+    setSyncStatus("synced");
 
     // 2. Fetch from API (MongoDB)
     let isMounted = true;
     async function fetchServerSession() {
       try {
-        const res = await fetch(`/api/session?date=${selectedDate}&day=${selectedDay}`);
-        if (res.ok && isMounted) {
-          const data = await res.json();
-          if (data.mongoConnected) {
-            setMongoStatus((prev) => ({ ...prev, connected: true, configured: true }));
+        const res = await fetch(
+          `/api/session?date=${encodeURIComponent(selectedDate)}&day=${encodeURIComponent(selectedDay)}`
+        );
+        if (!res.ok || !isMounted) return;
+        const data = await res.json();
+        if (data.mongoConnected) {
+          setMongoStatus((prev) => ({ ...prev, connected: true, configured: true }));
+        }
+        if (!isMounted) return;
+
+        const serverEntry =
+          data.items && typeof data.items === "object" && !Array.isArray(data.items)
+            ? { items: data.items, updatedAt: data.updatedAt || null, programVersion: data.programVersion ?? null }
+            : null;
+        const { entry: winner, source } = pickNewerSession(localEntry, serverEntry);
+
+        if (source === "server") {
+          // The server copy is genuinely newer, so it wins.
+          const merged = migrateItems(winner.items, selectedDay);
+          if (!isMounted) return;
+          if (merged.rekeyed || merged.unmapped.length > 0) {
+            setMigrationWarning(describeMigration(merged));
           }
-          if (data.items && hasSessionData(data.items)) {
-            setItems(data.items);
-            // Update local cache
-            try {
-              const cached = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
-              cached[sessionKey] = data.items;
-              localStorage.setItem(STORAGE_KEY, JSON.stringify(cached));
-            } catch (err) {}
-          } else {
-            // Server has no active session or it was cleared
-            if (!hasSessionData(localItems)) {
-              try {
-                const cached = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
-                delete cached[sessionKey];
-                localStorage.setItem(STORAGE_KEY, JSON.stringify(cached));
-              } catch (err) {}
-            }
-          }
+          setItems(merged.items);
+          writeCache(
+            sessionKey,
+            buildSessionEntry(merged.items, winner.updatedAt || new Date(), winner.programVersion ?? PROGRAM_VERSION)
+          );
+          return;
+        }
+
+        if (!data.mongoConnected) return;
+
+        if (hasSessionData(localEntry.items)) {
+          // The local copy is newer (or the server has nothing at all) — push
+          // it up instead of letting the server overwrite it.
+          queueSessionSave(selectedDate, selectedDay, localEntry.items);
+        } else if (!hasSessionData(serverEntry?.items)) {
+          writeCache(sessionKey, null);
         }
       } catch (err) {
         console.warn("API session fetch failed, using local cache:", err);
@@ -228,19 +448,36 @@ export default function WorkoutPage() {
   // Debounced auto-save function
   const saveSession = useCallback(
     (newItems) => {
-      const sessionKey = `${selectedDate}|${selectedDay}`;
+      const sessionKey = sessionKeyFor(selectedDate, selectedDay);
       const hasData = hasSessionData(newItems);
 
       // Save locally immediately or delete from cache if neutral
-      try {
-        const cached = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
-        if (hasData) {
-          cached[sessionKey] = newItems;
+      const write = writeCache(
+        sessionKey,
+        hasData ? buildSessionEntry(newItems, new Date(), PROGRAM_VERSION) : null
+      );
+
+      if (!write.ok) {
+        setSyncStatus("error");
+        if (write.quotaExceeded) {
+          showToast(
+            `This device is out of storage. Older sessions were trimmed to make room — export your history to back it up.`
+          );
         } else {
-          delete cached[sessionKey];
+          showToast(
+            "Couldn't write to this device's storage, so this change isn't saved yet. Export your session to keep a copy."
+          );
         }
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(cached));
-      } catch (e) {}
+      } else {
+        if (write.pruned > 0) {
+          showToast(
+            `Local cache trimmed to the ${MAX_CACHED_SESSIONS} most recent sessions.`,
+            "info"
+          );
+        }
+        setSyncStatus("saving");
+        queueSessionSave(selectedDate, selectedDay, newItems);
+      }
 
       // Update in-memory history list immediately if history panel is open
       setHistoryList((prev) => {
@@ -254,48 +491,18 @@ export default function WorkoutPage() {
           return prev;
         }
       });
-
-      setSyncStatus("saving");
-
-      if (saveTimeoutRef.current) {
-        clearTimeout(saveTimeoutRef.current);
-      }
-
-      saveTimeoutRef.current = setTimeout(async () => {
-        try {
-          const res = await fetch("/api/session", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              date: selectedDate,
-              day: selectedDay,
-              items: newItems,
-            }),
-          });
-          const result = await res.json();
-          if (result.mongoConnected) {
-            setMongoStatus((prev) => ({ ...prev, connected: true, configured: true }));
-            setSyncStatus("synced");
-          } else {
-            setSyncStatus("local");
-          }
-        } catch (err) {
-          setSyncStatus("local");
-        }
-      }, 500);
     },
-    [selectedDate, selectedDay]
+    [selectedDate, selectedDay, showToast]
   );
 
-  // Update an item in the session. Pure state update first, then side
-  // effects (persist + auto-collapse) outside the updater so rapid
-  // successive updates never work from stale state and StrictMode never
-  // double-fires saves.
+  // Update an item in the session. State first, then side effects (persist +
+  // auto-collapse) outside the updater so the updater stays pure and StrictMode
+  // never double-fires saves. Event handlers always close over the latest
+  // committed `items`.
   const updateItem = (key, updater, sIdx = null) => {
-    const current = itemsRef.current[key] || {};
+    const current = items[key] || {};
     const updated = updater(JSON.parse(JSON.stringify(current)));
-    const nextItems = { ...itemsRef.current, [key]: updated };
-    itemsRef.current = nextItems;
+    const nextItems = { ...items, [key]: updated };
     setItems(nextItems);
     saveSession(nextItems);
 
@@ -309,9 +516,8 @@ export default function WorkoutPage() {
     const section = currentProgramDay.sections[sIdx];
     if (!section) return;
 
-    const isAllDone = section.items.every((it, iIdx) => {
-      const k = `${sIdx}:${iIdx}`;
-      const itemData = currentItems[k] || {};
+    const isAllDone = section.items.every((it) => {
+      const itemData = currentItems[it.key] || {};
       if (it.kind === "simple" || it.kind === "result") {
         return !!itemData.done;
       }
@@ -347,7 +553,7 @@ export default function WorkoutPage() {
   };
 
   // Load history list and past sessions for ghost values
-  const loadHistory = async () => {
+  const loadHistory = useCallback(async () => {
     let sessions = [];
     let fetchedFromMongo = false;
     try {
@@ -356,7 +562,7 @@ export default function WorkoutPage() {
         const data = await res.json();
         if (data.mongoConnected && Array.isArray(data.sessions)) {
           sessions = data.sessions.filter((s) => hasSessionData(s.items));
-          setAllPastSessions(data.sessions);
+          setAllPastSessions(sessions);
           fetchedFromMongo = true;
         }
       }
@@ -364,49 +570,31 @@ export default function WorkoutPage() {
 
     // If MongoDB is not connected or local fallback, read valid sessions from localStorage
     if (!fetchedFromMongo) {
-      try {
-        const cached = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
-        sessions = Object.entries(cached)
-          .filter(([_, sessionItems]) => hasSessionData(sessionItems))
-          .map(([key, sessionItems]) => {
-            const [date, day] = key.split("|");
-            return { date, day, items: sessionItems };
-          })
-          .sort((a, b) => b.date.localeCompare(a.date));
-        setAllPastSessions(sessions);
-      } catch (e) {}
+      const cached = readCache();
+      sessions = Object.entries(cached)
+        .map(([key, entry]) => {
+          const [date, day] = key.split("|");
+          return { date, day, ...readSessionEntry(entry, day) };
+        })
+        .filter((s) => hasSessionData(s.items))
+        .sort((a, b) => b.date.localeCompare(a.date));
+      setAllPastSessions(sessions);
     }
 
     setHistoryList(sessions);
-  };
+  }, []);
 
-  // Pre-load past sessions on mount & date change for ghost display
+  // History is loaded once on mount, not on every date/day change: each load
+  // used to mean a full history query from Mongo.
   useEffect(() => {
     loadHistory();
-  }, [selectedDate, selectedDay]);
+  }, [loadHistory]);
 
-  // Compute most recent previous session for progressive overload ghost values
-  const previousSession = useMemo(() => {
-    if (allPastSessions && allPastSessions.length > 0) {
-      const match = allPastSessions.find(
-        (s) => s.day === selectedDay && s.date < selectedDate && hasSessionData(s.items)
-      );
-      if (match) return match;
-    }
-
-    try {
-      const cached = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
-      const list = Object.entries(cached)
-        .map(([k, sItems]) => {
-          const [d, day] = k.split("|");
-          return { date: d, day, items: sItems };
-        })
-        .filter((s) => s.day === selectedDay && s.date < selectedDate && hasSessionData(s.items))
-        .sort((a, b) => b.date.localeCompare(a.date));
-      if (list.length > 0) return list[0];
-    } catch (e) {}
-
-    return null;
+  // Most recent previous session for progressive overload ghost values.
+  // Resolved in an effect so the server render and the first client render
+  // agree that there is no ghost session yet.
+  useEffect(() => {
+    setPreviousSession(findPreviousSession(allPastSessions, selectedDay, selectedDate));
   }, [allPastSessions, selectedDay, selectedDate]);
 
   const toggleHistory = () => {
@@ -419,12 +607,11 @@ export default function WorkoutPage() {
   const currentProgramDay = PROGRAM[selectedDay] || PROGRAM.day1;
 
   // Session progress calculation (dynamically accounts for added/removed sets)
-  const totalSetsInDay = currentProgramDay.sections.reduce((acc, sec, sIdx) => {
+  const totalSetsInDay = currentProgramDay.sections.reduce((acc, sec) => {
     return (
       acc +
-      sec.items.reduce((sAcc, item, iIdx) => {
-        const key = `${sIdx}:${iIdx}`;
-        const saved = items[key] || {};
+      sec.items.reduce((sAcc, item) => {
+        const saved = items[item.key] || {};
         if (item.kind === "sets") {
           const sCount = saved.customSetCount !== undefined ? saved.customSetCount : item.setCount;
           return sAcc + sCount;
@@ -435,14 +622,20 @@ export default function WorkoutPage() {
     );
   }, 0);
 
-  const completedSetsInDay = currentProgramDay.sections.reduce((acc, sec, sIdx) => {
+  // Only indices 1..count count, otherwise a stale payload with leftover set
+  // keys can push the bar past its own track.
+  const completedSetsInDay = currentProgramDay.sections.reduce((acc, sec) => {
     return (
       acc +
-      sec.items.reduce((sAcc, item, iIdx) => {
-        const key = `${sIdx}:${iIdx}`;
-        const saved = items[key] || {};
+      sec.items.reduce((sAcc, item) => {
+        const saved = items[item.key] || {};
         if (item.kind === "sets") {
-          const doneCount = Object.values(saved.sets || {}).filter((s) => s.done).length;
+          const count = saved.customSetCount !== undefined ? saved.customSetCount : item.setCount;
+          const sObj = saved.sets || {};
+          let doneCount = 0;
+          for (let s = 1; s <= count; s++) {
+            if (sObj[String(s)]?.done) doneCount++;
+          }
           return sAcc + doneCount;
         }
         if ((item.kind === "simple" || item.kind === "result") && saved.done) {
@@ -454,8 +647,25 @@ export default function WorkoutPage() {
   }, 0);
 
   const progressPercent = totalSetsInDay > 0
-    ? Math.round((completedSetsInDay / totalSetsInDay) * 100)
+    ? Math.min(100, Math.max(0, Math.round((completedSetsInDay / totalSetsInDay) * 100)))
     : 0;
+
+  const syncIndicatorClass =
+    syncStatus === "saving"
+      ? "saving"
+      : syncStatus === "synced"
+      ? "synced"
+      : syncStatus === "error"
+      ? "error"
+      : "local";
+  const syncIndicatorText =
+    syncStatus === "saving"
+      ? "Saving..."
+      : syncStatus === "error"
+      ? "Couldn't save — data is only on this device"
+      : syncStatus === "local"
+      ? "Saved on this device only"
+      : "✓ Saved";
 
   return (
     <main className="app-container">
@@ -526,7 +736,34 @@ export default function WorkoutPage() {
           currentSession={{ date: selectedDate, day: selectedDay, items }}
           historyList={historyList}
           program={PROGRAM}
+          weightUnit={weightUnit}
         />
+      )}
+
+      {toast && (
+        <div
+          className="save-toast"
+          role="status"
+          aria-live="polite"
+          style={{
+            position: "fixed",
+            left: "50%",
+            bottom: "20px",
+            transform: "translateX(-50%)",
+            zIndex: 200,
+            maxWidth: "min(92vw, 420px)",
+            padding: "12px 16px",
+            borderRadius: "10px",
+            fontSize: "0.85rem",
+            lineHeight: 1.4,
+            background: "var(--card-elevated, #16181d)",
+            border: `1px solid ${toast.tone === "info" ? "rgba(56, 189, 248, 0.4)" : "rgba(248, 113, 113, 0.45)"}`,
+            color: toast.tone === "info" ? "#7dd3fc" : "#fca5a5",
+            boxShadow: "0 10px 30px rgba(0, 0, 0, 0.45)",
+          }}
+        >
+          {toast.message}
+        </div>
       )}
 
       {/* History Drawer / Panel */}
@@ -561,9 +798,9 @@ export default function WorkoutPage() {
             </p>
           ) : (
             <div className="history-list">
-              {historyList.map((h, idx) => (
+              {historyList.map((h) => (
                 <button
-                  key={idx}
+                  key={sessionKeyFor(h.date, h.day)}
                   className="history-item-btn"
                   onClick={() => {
                     setSelectedDate(h.date);
@@ -592,9 +829,12 @@ export default function WorkoutPage() {
         ].map((d) => (
           <button
             key={d.id}
+            id={`day-tab-${d.id}`}
             type="button"
             role="tab"
             aria-selected={selectedDay === d.id}
+            aria-controls="workout-tabpanel"
+            tabIndex={selectedDay === d.id ? 0 : -1}
             className={`day-tab-btn ${selectedDay === d.id ? "active" : ""}`}
             onClick={() => {
               setSelectedDay(d.id);
@@ -644,15 +884,67 @@ export default function WorkoutPage() {
           />
         </div>
 
+        <div className="control-field">
+          <label className="control-label" htmlFor="weight-unit-select">
+            Weight Unit
+          </label>
+          <select
+            id="weight-unit-select"
+            className="control-select"
+            value={weightUnit}
+            onChange={(e) => {
+              const next = normalizeWeightUnit(e.target.value);
+              setWeightUnit(next);
+              try {
+                globalThis.localStorage?.setItem(WEIGHT_UNIT_STORAGE_KEY, next);
+              } catch (err) {
+                console.warn("Error saving weight unit preference:", err);
+              }
+            }}
+          >
+            {WEIGHT_UNITS.map((unit) => (
+              <option key={unit} value={unit}>
+                {unit}
+              </option>
+            ))}
+          </select>
+        </div>
+
         <div
-          className={`sync-indicator ${
-            syncStatus === "saving" ? "saving" : "synced"
-          }`}
+          className={`sync-indicator ${syncIndicatorClass}`}
+          role="status"
+          aria-live="polite"
         >
-          {syncStatus === "saving" ? "Saving..." : "✓ Saved"}
+          {syncIndicatorText}
         </div>
       </section>
 
+      {migrationWarning && (
+        <div
+          className="migration-warning"
+          role="status"
+          aria-live="polite"
+          style={{
+            margin: "0 0 16px",
+            padding: "12px 14px",
+            borderRadius: "10px",
+            fontSize: "0.85rem",
+            lineHeight: 1.45,
+            background: "rgba(250, 204, 21, 0.08)",
+            border: "1px solid rgba(250, 204, 21, 0.35)",
+            color: "#fde68a",
+          }}
+        >
+          <strong>Program changed.</strong> {migrationWarning}
+        </div>
+      )}
+
+      <div
+        id="workout-tabpanel"
+        role="tabpanel"
+        aria-labelledby={`day-tab-${selectedDay}`}
+        tabIndex={-1}
+      >
       {/* Day Title & Progress Card */}
       <div className="day-info-card">
         <div className="day-info-main">
@@ -661,12 +953,20 @@ export default function WorkoutPage() {
         </div>
         <div className="day-progress-wrap">
           <div className="day-progress-header">
-            <span className="day-progress-label">Today's Progress</span>
+            <span className="day-progress-label">Today’s Progress</span>
             <span className="day-progress-stat">
               <strong>{completedSetsInDay}</strong> / {totalSetsInDay} completed ({progressPercent}%)
             </span>
           </div>
-          <div className="day-progress-track">
+          <div
+            className="day-progress-track"
+            role="progressbar"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={progressPercent}
+            aria-valuetext={`${completedSetsInDay} of ${totalSetsInDay} sets completed`}
+            aria-label="Today's workout progress"
+          >
             <div
               className={`day-progress-bar ${progressPercent === 100 ? "all-done" : ""}`}
               style={{ width: `${progressPercent}%` }}
@@ -681,9 +981,8 @@ export default function WorkoutPage() {
 
         // Calculate completion status for section header badge
         let sectionDoneCount = 0;
-        section.items.forEach((it, iIdx) => {
-          const k = `${sIdx}:${iIdx}`;
-          const itData = items[k] || {};
+        section.items.forEach((it) => {
+          const itData = items[it.key] || {};
           if (it.kind === "simple" || it.kind === "result") {
             if (itData.done) sectionDoneCount++;
           } else if (it.kind === "sets") {
@@ -703,34 +1002,35 @@ export default function WorkoutPage() {
 
         return (
           <section key={sIdx} className="workout-section">
-            <div
+            <button
+              type="button"
               className="section-header clickable"
               onClick={() => toggleSection(sIdx)}
-              role="button"
               aria-expanded={!isCollapsed}
+              aria-controls={`section-items-${sIdx}`}
               title={isCollapsed ? "Click to expand" : "Click to collapse"}
             >
-              <div className="section-header-title-wrap">
+              <span className="section-header-title-wrap">
                 <span className={`section-collapse-chevron ${isCollapsed ? "collapsed" : ""}`}>
                   ▼
                 </span>
                 <h3>{section.title}</h3>
                 {section.hint && <span className="section-hint">{section.hint}</span>}
-              </div>
+              </span>
 
-              <div className="section-header-badge-wrap">
+              <span className="section-header-badge-wrap">
                 <span className={`section-status-badge ${isSectionComplete ? "completed" : ""}`}>
                   {isSectionComplete ? "✓ Complete" : `${sectionDoneCount}/${section.items.length}`}
                 </span>
-              </div>
-            </div>
+              </span>
+            </button>
 
             {!isCollapsed && (
-              <div className="section-items">
-                {section.items.map((item, iIdx) => {
-                  const key = `${sIdx}:${iIdx}`;
+              <div className="section-items" id={`section-items-${sIdx}`}>
+                {section.items.map((item) => {
+                  const key = item.key;
                   const saved = items[key] || {};
-                  const prevItem = previousSession?.items?.[key];
+                  const prevItem = previousSession?.items?.[key] ?? previousSession?.items?.[item.legacyKey];
 
                   return (
                     <div key={key} className="exercise-box">
@@ -781,22 +1081,32 @@ export default function WorkoutPage() {
 
                       {/* Sets table */}
                       {item.kind === "sets" && (() => {
-                        const defaultReps = getDefaultReps(item.target);
-                        const currentSetCount = saved.customSetCount !== undefined ? saved.customSetCount : item.setCount;
+                        const repsUnit = item.unit || "reps";
+                        const repsUnitLabelText = repsUnitLabel(repsUnit);
+                        const defaultReps = getDefaultReps(item.target, repsUnit);
+                        const currentSetCount = Math.min(
+                          MAX_CUSTOM_SET_COUNT,
+                          saved.customSetCount !== undefined ? saved.customSetCount : item.setCount
+                        );
+
+                        const cleanWeight = (val) => coerceNumberInput(val, { max: 1000 });
+                        const cleanReps = (val) => coerceNumberInput(val, { max: 10000 });
 
                         const handleWeightChange = (setNum, val) => {
+                          const parsed = cleanWeight(val);
+                          if (parsed.invalid) return;
                           updateItem(key, (it) => {
                             const nextSets = { ...(it.sets || {}) };
                             const setKey = String(setNum);
-                            const oldWeight = nextSets[setKey]?.weight || "";
+                            const oldWeight = nextSets[setKey]?.weight ?? "";
 
                             nextSets[setKey] = {
                               ...(nextSets[setKey] || {}),
-                              weight: val,
+                              weight: parsed.present ? parsed.value : "",
                             };
 
                             // When weight is entered, populate default reps if reps is empty
-                            if (val.trim() !== "" && (!nextSets[setKey].reps || nextSets[setKey].reps.trim() === "")) {
+                            if (parsed.present && (!nextSets[setKey].reps || String(nextSets[setKey].reps).trim() === "")) {
                               nextSets[setKey].reps = defaultReps;
                             }
 
@@ -806,13 +1116,13 @@ export default function WorkoutPage() {
                               for (let s = 2; s <= currentSetCount; s++) {
                                 const sKey = String(s);
                                 const curSet = nextSets[sKey] || {};
-                                const curWeight = curSet.weight || "";
+                                const curWeight = curSet.weight ?? "";
                                 if (curWeight === "" || curWeight === oldWeight) {
                                   nextSets[sKey] = {
                                     ...curSet,
-                                    weight: val,
+                                    weight: parsed.present ? parsed.value : "",
                                   };
-                                  if (val.trim() !== "" && (!nextSets[sKey].reps || nextSets[sKey].reps.trim() === "")) {
+                                  if (parsed.present && (!nextSets[sKey].reps || String(nextSets[sKey].reps).trim() === "")) {
                                     nextSets[sKey].reps = defaultReps;
                                   }
                                 }
@@ -824,12 +1134,14 @@ export default function WorkoutPage() {
                         };
 
                         const handleRepsChange = (setNum, val) => {
+                          const parsed = cleanReps(val);
+                          if (parsed.invalid) return;
                           updateItem(key, (it) => {
                             const nextSets = { ...(it.sets || {}) };
                             const setKey = String(setNum);
                             nextSets[setKey] = {
                               ...(nextSets[setKey] || {}),
-                              reps: val,
+                              reps: parsed.present ? parsed.value : "",
                             };
                             return { ...it, sets: nextSets };
                           }, sIdx);
@@ -892,9 +1204,9 @@ export default function WorkoutPage() {
                               <div style={{ textAlign: "center" }}>Set</div>
                               <div>Weight</div>
                               <div className="reps-header-cell">
-                                <span>Reps</span>
+                                <span>{repsUnit === "reps" ? "Reps" : repsUnitLabelText}</span>
                                 {item.target && (
-                                  <span className="target-pill" title={`Target range: ${item.target} reps`}>
+                                  <span className="target-pill" title={`Target: ${item.target}`}>
                                     ({item.target})
                                   </span>
                                 )}
@@ -924,9 +1236,10 @@ export default function WorkoutPage() {
                                         type="text"
                                         inputMode="decimal"
                                         className="set-input weight-input"
-                                        placeholder={prevSet?.weight ? `Last: ${prevSet.weight}` : (disableWeight ? "—" : "kg")}
+                                        aria-label={`${item.name} weight, set ${setNum}${disableWeight ? " (not tracked for this exercise)" : `, in ${weightUnit}`}`}
+                                        placeholder={prevSet?.weight ? `Last: ${formatWeightValue(prevSet.weight, weightUnit)}` : (disableWeight ? "—" : weightUnit)}
                                         disabled={disableWeight}
-                                        value={setData.weight || ""}
+                                        value={setData.weight ?? ""}
                                         onChange={(e) => handleWeightChange(setNum, e.target.value)}
                                       />
                                     </div>
@@ -936,9 +1249,9 @@ export default function WorkoutPage() {
                                         <button
                                           type="button"
                                           className="stepper-btn minus"
-                                          aria-label={`Decrease reps for set ${setNum}`}
+                                          aria-label={`Decrease ${repsUnitLabelText} for ${item.name}, set ${setNum}`}
                                           onClick={() => handleStepReps(setNum, -1)}
-                                          title="-1 rep"
+                                          title={`-1 ${repsUnitLabelText}`}
                                         >
                                           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                                             <line x1="5" y1="12" x2="19" y2="12" />
@@ -949,16 +1262,17 @@ export default function WorkoutPage() {
                                           inputMode="numeric"
                                           pattern="[0-9]*"
                                           className="set-input reps-input"
-                                          placeholder={prevSet?.reps ? `Last: ${prevSet.reps}` : (item.target || "Reps")}
-                                          value={setData.reps || ""}
+                                          aria-label={`${item.name} ${repsUnitLabelText}, set ${setNum}`}
+                                          placeholder={prevSet?.reps ? `Last: ${prevSet.reps}` : (item.target || repsUnitLabelText)}
+                                          value={setData.reps ?? ""}
                                           onChange={(e) => handleRepsChange(setNum, e.target.value)}
                                         />
                                         <button
                                           type="button"
                                           className="stepper-btn plus"
-                                          aria-label={`Increase reps for set ${setNum}`}
+                                          aria-label={`Increase ${repsUnitLabelText} for ${item.name}, set ${setNum}`}
                                           onClick={() => handleStepReps(setNum, 1)}
-                                          title="+1 rep"
+                                          title={`+1 ${repsUnitLabelText}`}
                                         >
                                           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                                             <line x1="12" y1="5" x2="12" y2="19" />
@@ -980,7 +1294,19 @@ export default function WorkoutPage() {
                                           }}
                                         >
                                           <span className="ghost-arrow">⏮</span>
-                                          <span>Last: {prevSet.weight ? `${prevSet.weight}kg` : ""}{prevSet.weight && prevSet.reps ? " × " : ""}{prevSet.reps ? `${prevSet.reps}` : ""}</span>
+                                          <span>
+                                            Last:{" "}
+                                            {[
+                                              prevSet.weight
+                                                ? formatWeightValue(prevSet.weight, weightUnit)
+                                                : "",
+                                              prevSet.reps
+                                                ? formatRepsValue(prevSet.reps, repsUnit)
+                                                : "",
+                                            ]
+                                              .filter(Boolean)
+                                              .join(" × ")}
+                                          </span>
                                         </button>
                                       )}
                                     </div>
@@ -1013,9 +1339,10 @@ export default function WorkoutPage() {
                                   triggerHaptic("light");
                                   updateItem(key, (it) => {
                                     const count = it.customSetCount !== undefined ? it.customSetCount : item.setCount;
-                                    const nextCount = count + 1;
+                                    const nextCount = Math.min(MAX_CUSTOM_SET_COUNT, count + 1);
+                                    if (nextCount === count) return it;
                                     const nextSets = { ...(it.sets || {}) };
-                                    const prevWeight = nextSets[String(count)]?.weight || nextSets["1"]?.weight || "";
+                                    const prevWeight = nextSets[String(count)]?.weight ?? nextSets["1"]?.weight ?? "";
                                     nextSets[String(nextCount)] = {
                                       weight: prevWeight,
                                       reps: defaultReps,
@@ -1066,6 +1393,7 @@ export default function WorkoutPage() {
                             <input
                               type="text"
                               className="set-input"
+                              aria-label={`${item.name} — ${item.label1}`}
                               value={saved.value1 || ""}
                               placeholder="e.g. Incline Walk 25m"
                               onChange={(e) => {
@@ -1079,6 +1407,7 @@ export default function WorkoutPage() {
                             <input
                               type="text"
                               className="set-input"
+                              aria-label={`${item.name} — ${item.label2}`}
                               value={saved.value2 || ""}
                               placeholder="Notes / speed / incline"
                               onChange={(e) => {
@@ -1091,7 +1420,7 @@ export default function WorkoutPage() {
                             <button
                               type="button"
                               className={`set-done-btn ${saved.done ? "is-done" : ""}`}
-                              aria-label={`Mark completed`}
+                              aria-label={`Mark ${item.name} ${saved.done ? "incomplete" : "complete"}`}
                               onClick={() => {
                                 triggerHaptic("medium");
                                 const nextDone = !saved.done;
@@ -1117,6 +1446,7 @@ export default function WorkoutPage() {
           </section>
         );
       })}
+      </div>
 
       {/* Program Guidelines / Reference */}
       <section className="reference-section" aria-label="Reference rules">
@@ -1173,7 +1503,7 @@ export default function WorkoutPage() {
           <summary>First 4 Weeks — Return-to-Gym Rule</summary>
           <div className="reference-content">
             <div className="ref-alert-box">
-              Because you're coming back after 5–7 months, don't immediately perform the full volume.
+              Because you’re coming back after 5–7 months, don’t immediately perform the full volume.
             </div>
             <p>
               <strong>Weeks 1–2:</strong> Perform 2 working sets of almost every
@@ -1197,7 +1527,7 @@ export default function WorkoutPage() {
           <summary>Off Days</summary>
           <div className="reference-content">
             <p>
-              Aim for healthy recovery without complete inactivity (except where you're genuinely tired). Easy walking is beneficial.
+              Aim for healthy recovery without complete inactivity (except where you’re genuinely tired). Easy walking is beneficial.
             </p>
             <p>
               <strong>Daily Target:</strong> 20–40 minute walk, plus optionally:
@@ -1285,7 +1615,7 @@ export default function WorkoutPage() {
           <summary>Complete Body Audit (56 Functions) & Replacement Rule</summary>
           <div className="reference-content">
             <div className="ref-alert-box">
-              <strong>The Golden Rule:</strong> If you ever dislike an exercise, don't just delete it. Replace it with an exercise that preserves <strong>exactly the same muscle and function</strong>. That way you maintain complete full-body coverage without creating holes in the plan.
+              <strong>The Golden Rule:</strong> If you ever dislike an exercise, don’t just delete it. Replace it with an exercise that preserves <strong>exactly the same muscle and function</strong>. That way you maintain complete full-body coverage without creating holes in the plan.
             </div>
             <div className="ref-table-wrap">
               <table className="ref-table">
