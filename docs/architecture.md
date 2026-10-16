@@ -1,244 +1,306 @@
 # Architecture — Workout Tracker
 
-Small Next.js (App Router) personal workout tracker. Client works fully offline on
-`localStorage`; MongoDB is an optional cloud-sync backend. Offline-first: every API
-route falls back to local-only behaviour when `MONGODB_URI` is unset or
-unreachable.
+Updated 2026-10-16. Personal Next.js App Router tracker with a three-day full-body routine. Plain JavaScript/JSX and CSS; optional MongoDB sync; localStorage is the immediate save target.
 
-**The API is unauthenticated.** `/api/session`, `/api/history` and `/api/status`
-have no login, no session cookie and no user model, so anyone who can reach the
-deployment can read, overwrite or delete any session in the database by date. The
-owner has explicitly accepted this for now (single-user personal app, expected to
-run on localhost or a private tunnel). **It must be gated before any public
-deploy.** Tracked under `## 🔴 Vulnerabilities` in `docs/suggestions.md`.
+The existing API remains unauthenticated by the owner's prior decision for personal/private use. This change does not add an identity/role model. The existing access risk and unresolved lint-tool advisories are tracked in `docs/suggestions.md`.
 
 ## File inventory
 
-### `app/page.js` (1712 lines, `"use client"`)
-Main tracker UI. Purpose: day/date selection, set logging, progress, history,
-export, debounced auto-save (localStorage + `POST /api/session`).
-- `downloadFile(content, filename, mimeType)` — Blob download helper.
-- `ExportModal({ onClose, currentSession, historyList, program, weightUnit })` — export
-  dialog; focuses itself on mount and closes on Escape; `handleExport()` builds
-  content via `formatSessionAsText` (from `@/lib/session-format`, passed
-  `{ weightUnit }`) or `JSON.stringify` and calls `downloadFile`.
-- `getLocalDateString()` — browser-local `YYYY-MM-DD` for the date input and session keys.
-- `triggerHaptic(type)` — `navigator.vibrate` wrapper (light/medium/success).
-- `describeMigration(migrated)` — user-facing text for a program-version re-key or
-  for logged data that no longer maps to a current exercise.
-- `findPreviousSession(allPastSessions, selectedDay, selectedDate)` — most recent prior
-  same-day session, Mongo list first then the local cache. Called from an effect, never
-  during render.
-- `saveQueue` / `syncCallbacks` / `setSyncStatusSafe` / `setMongoConnectedSafe` /
-  `postSession` / `flushPendingSave` / `queueSessionSave` / `flushAllPendingSaves` —
-  module-level debounced sync queue holding **one pending-save record per
-  `${date}|${day}`**, so switching day/date (or unloading) flushes the outgoing session
-  instead of discarding it. Deliberately outside React so timers and unload handlers can
-  reach it without reading a ref from render scope.
-- `WorkoutPage()` (default export) — root component + handlers:
-  - `checkStatus()` — polls `GET /api/status` (15 s interval) into `mongoStatus`.
-  - load effect (on `selectedDate`/`selectedDay`) — sets `saveQueue.activeKey`, flushes the
-    previous session's pending save, paints from the local cache, then merges with the
-    server using `pickNewerSession` (server copy wins only when strictly newer) and
-    surfaces a migration warning via `setMigrationWarning`.
-  - `showToast(message, tone)` + auto-dismiss effect — quota / cache-prune / write-failure notices.
-  - `saveSession(newItems)` — immediate `writeCache` (envelope with `schema`,
-    `programVersion`, `items`, `updatedAt`), history-list patch, then `queueSessionSave`.
-    Sets `syncStatus` `saving` / `error` (`error` when the local write itself failed).
-  - `updateItem(key, updater, sIdx)` — state update from the latest committed `items`,
-    then `saveSession` + `checkAutoCollapse` outside the updater (StrictMode-safe).
-  - `checkAutoCollapse(sIdx, currentItems)` — collapses a section + success haptic when all
-    its sets/items are done; keys by `item.key`.
-  - `toggleSection(sIdx)` — manual collapse toggle + light haptic.
-  - `loadHistory()` — `GET /api/history` when Mongo connected, else rebuilds from the local
-    cache. Runs **once on mount** (and on history-panel open), not on every date/day change.
-  - previous-session effect — resolves `previousSession` into state (starts `null` so SSR
-    and the first client render agree).
-  - `totalSetsInDay` / `completedSetsInDay` / `progressPercent` — progress math honouring
-    per-item `customSetCount`; `completedSetsInDay` counts only set indices `1..count` and
-    `progressPercent` is clamped to 0–100.
-  - `syncIndicatorClass` / `syncIndicatorText` — renders `Saving...` / `✓ Saved` /
-    `Saved on this device only` / `Couldn't save — data is only on this device`.
-  - Weight-unit `<select>` — persists `kg` / `lb` to `localStorage`; the value flows into the
-    weight placeholder, the ghost chip and the text export.
-  - Item identity is `item.key` (`${dayId}:${slug}`), never a positional index.
+### `app/page.js`
 
-### `app/layout.js` (20 lines)
-Root layout + metadata. Purpose: html shell, title/description, mobile viewport.
-- `RootLayout({ children })` — renders `<html lang="en"><body>{children}</body></html>`.
-- Exports `metadata` (title/description) and `viewport` (device-width, themeColor).
+Client workout page: day/date and unit selection, local/cloud saving, resume navigation, history, export and on-demand form guides.
+- `downloadFile` — creates a temporary Blob URL and downloads JSON/text.
+- `ExportModal` — current/history scope and format dialog; nested `handleExport` renders/downloads the selected data; focus/Escape effect supports dismissal.
+- `getLocalDateString` — browser-local calendar key after mount, avoiding server/client date hydration differences.
+- `triggerHaptic` — optional vibration for completion and section controls.
+- `describeMigration` — explains retained removed exercise data and historical identity updates.
+- `findPreviousSession` — finds the newest earlier same-day-program session for previous values.
+- `postSession` — validated API write; returns cloud/device status, throws on HTTP failures.
+- `sessionSync.onStatus` — updates only the active session and distinguishes cloud-only saves after device-storage failure.
+- `flushPendingSave`, `queueSessionSave`, `flushAllPendingSaves` — adapt the centralized serialized save queue to selection changes, debouncing and unload.
+- `WorkoutPage` — root component. Nested `showToast` reports concise feedback; `checkStatus` polls cloud status; `fetchServerSession` loads/merges cloud data and rejects late responses after local edits; `saveSession` writes versioned snapshots/tombstones, queues cloud saving, and updates both history lists; `patchHistory` keeps actual entries and sorted identities; `updateItem` changes one exercise then saves outside the React updater; `checkAutoCollapse` collapses completed sections only if session/edit version is still current; `toggleSection` expands/collapses; `loadHistory` merges both storage sources with timeout/loading/fallback feedback; `toggleHistory` refreshes on opening; `jumpToFirstUnchecked` expands/scrolls to the first unfinished exercise below sticky controls and optionally focuses it.
+- Effects: toast dismissal, sync callbacks, cloud status polling, browser date/unit/day hydration, selected-day persistence, unload flush, session loading, history loading, previous-session resolution and one-time resume scrolling. Auto scrolling is skipped after an edit during a pending cloud load and respects reduced motion. No image is mounted on the default page.
 
-### `app/globals.css` (1308 lines, no functions)
-Whole-app stylesheet. Purpose: dark theme variables, layout, header/progress, sections,
-set rows, history panel, export modal, responsive rules. Includes the
-`.sync-indicator.local` / `.sync-indicator.error` states and the button reset +
-`:focus-visible` ring for `.section-header`.
+### `app/layout.js`
 
-### `app/api/session/route.js` (101 lines)
-Per-session read/write, fully validated. Offline fallback: `{ source: "local-only" }` /
-`{ success: false, mongoConnected: false }` when the DB is unavailable (the client keeps
-localStorage as the source of truth).
-- `errorResponse(code, status, extra)` — fixed-code error body helper; never returns a raw
-  driver/parser message.
-- `GET(request)` — validates `?date=&day=` via `validateSessionQuery` **before any DB call**
-  (400 `INVALID_DATE` / `INVALID_DAY`); returns stored `items`, `updatedAt`,
-  `programVersion`.
-- `POST(request)` — `readJsonBody` (400 `INVALID_JSON` / 413 `PAYLOAD_TOO_LARGE`) then
-  `validateSessionPayload` (400 `INVALID_ITEMS` / `INVALID_PROGRAM_VERSION`); the filter is
-  built only from the validated strings. Deletes the doc when `hasSessionData(items)` is
-  false, else upserts `{ date, day, items, updatedAt, programVersion }`.
+Root metadata and mobile viewport. `RootLayout` renders the HTML/body shell and children.
 
-### `app/api/history/route.js` (73 lines)
-History feed. Offline fallback: `{ sessions: [], mongoConnected: false }`.
-- `ACTIVE_FILTER` — hard-coded `{ items: { $exists: true } }`; never derived from client input.
-- `cleanupEmptySessions(db)` — one-shot per process (memoised `cleanupPromise`) removal of
-  legacy empty documents, so it is not paid on every history request.
-- `GET()` — `find(ACTIVE_FILTER)` sorted `{ date: -1, day: 1 }` (stable for same-day ties),
-  limit 100; each session is passed through `migrateItems` so history is keyed by current
-  slugs; returns the first 60 active sessions with `unmappedItems` flagged.
+### `app/globals.css`
 
-### `app/api/status/route.js` (6 lines)
-DB health probe.
-- `GET()` — returns only `{ configured, connected }` booleans; no `MONGODB_URI` presence
-  detail and no driver message.
+App theme, responsive cards, three-day tabs, compact sticky controls, entry rows, progress/history/export styling, individual guide images/dialogs, keyboard focus and reduced-motion rules. No functions.
 
-### `lib/mongodb.js` (71 lines)
-Mongo connection + indexes + status. Purpose: lazy singleton client, `workout_tracker` db.
-- `ensureIndexes(db)` — memoised `createIndex({ date: 1, day: 1 }, { unique: true })` and
-  `{ date: -1, day: 1 }`; falls back to the non-unique index if a pre-existing duplicate
-  blocks the unique one.
-- `getDatabase()` — returns `Db` or `null` when `MONGODB_URI` is unset/blank or connect fails
-  (resets `clientPromise`/`indexesPromise` so later calls retry); awaits `ensureIndexes`.
-- `checkMongoStatus()` — `{ configured, connected }` only; logs the reason server-side.
+### `app/api/session/route.js`
 
-### `lib/validate.js` (254 lines, no React)
-Shared request/payload validation. Every value the server stores is whitelist-constructed
-here so a raw client value can never reach a Mongo filter as an operator object.
-Exports: `MAX_BODY_BYTES`, `MAX_ITEMS`, `MAX_SETS_PER_ITEM`, `MAX_SET_COUNT`, `MAX_WEIGHT`,
-`MAX_REPS`, `MAX_VALUE_LENGTH`, `MAX_PROGRAM_VERSION`, `ERROR_CODES`, `isDateKey`,
-`isDayKey`, `isItemKey`, `coerceNumberInput`, `sanitizeItems`, `validateSessionQuery`,
-`validateSessionPayload`, `byteLength`, `readJsonBody`.
-- `isDateKey(v)` / `isDayKey(v)` — `/^\d{4}-\d{2}-\d{2}$/` and `/^day[1-4]$/`, string-only.
-- `isItemKey(v)` — legacy `/^\d+:\d+$/` or current `/^day[1-4]:[a-z0-9][a-z0-9-]*$/`.
-- `coerceNumberInput(value, { min, max })` — `{ present, value }` / `{ present: false }` /
-  `{ present: false, invalid: true }`; blank text means "absent", non-numeric text, negatives
-  and out-of-range values are `invalid`. Also used by the client input handlers so garbage
-  never reaches storage.
-- `sanitizeItems(raw)` — builds a fresh object; rejects operator keys, non-object payloads,
-  unknown fields, `NaN`/`Infinity`/negative/out-of-range weight (0–1000) or reps (0–10000),
-  `customSetCount` outside 1–20, set keys outside `1..20`, and `value1`/`value2` over 500 chars.
-- `validateSessionQuery` / `validateSessionPayload` — fixed failure codes.
-- `readJsonBody(request)` — rejects an oversize `content-length` before reading, then reads
-  text, re-checks the real byte length, and returns `PAYLOAD_TOO_LARGE` / `INVALID_JSON`
-  instead of letting a `SyntaxError` become a 500 that echoes the request.
+`errorResponse` returns fixed error codes. `GET` validates real date/day before querying and returns items/timestamp/version or device-only fallback. `POST` bounds/parses/validates JSON, sanitizes all stored values, and upserts or clears exactly one date/day session. Existing historical day4 keys stay API-compatible; day4 is not in the active program.
 
-### `lib/program.js` (1102 lines)
-Workout program data + builders + item identity + positional-key migration.
-- `simple(name, prescription, note)` — `{ kind: "simple" }` check-off item builder.
-- `sets(name, prescription, note, setCount, target, track, unit)` — `{ kind: "sets" }`
-  multi-set builder. `unit` is `"reps" | "sec" | "m"` and is set explicitly on all 78 set
-  items, so a timed hold is never labelled "reps" and a sled push is never labelled "reps".
-- `result(name, prescription, note, label1, label2)` — `{ kind: "result" }` two-field builder.
-- `hasLoggedValue(v)` — numeric-aware "is this field filled in" check.
-- `hasSessionData(items)` — true if any item/set has done/values (drives save, delete-empty,
-  history filtering, ghost lookup). Treats numeric `0` as not-logged.
-- `PROGRAM` (const, no functions) — `day1` Full Body A (10 sections / 28 items), `day2`
-  Full Body B (10 / 29), `day3` Full Body C (12 / 38), `day4` Optional conditioning (5 / 23).
-- `PROGRAM_VERSION` — bumped when the logged-item shape changes; currently `2`.
-- `slugify(name)` — name → stable id.
-- `decorateProgram()` — stamps `item.id`, `item.key` (`${dayId}:${slug}`) and
-  `item.legacyKey` (`${sIdx}:${iIdx}`) onto every item; disambiguates duplicate names.
-- `getProgramDay(dayId)` / `getItemByLegacyKey(dayId, sIdx, iIdx)` — lookups.
-- `migrateItems(rawItems, dayId)` — reads current-slug **or** legacy positional payloads and
-  returns `{ items, rekeyed, unmapped }`. `unmapped` data is kept verbatim (never dropped) so
-  the UI can warn instead of silently mis-attributing or discarding.
+### `app/api/history/route.js`
 
-### `lib/session-format.js` (105 lines)
-Pure session-formatting helpers (no React, no DOM — unit-tested).
-- `REPS_UNITS`, `WEIGHT_UNITS` — allowed unit vocabularies.
-- `normalizeWeightUnit(value)` / `normalizeRepsUnit(value)` — clamp to the vocabularies.
-- `repsUnitLabel(unit)`, `formatWeightValue(weight, weightUnit)`, `formatRepsValue(reps, unit)`.
-- `formatSessionAsText(session, program, options)` — renders a session as shareable text;
-  reads `items[item.key] ?? items[item.legacyKey]` and uses each item's `unit`.
-- `getDefaultReps(target, unit)` — midpoint of a `"8–12"`-style range (or single number);
-  falls back per unit (`reps` → 10, `sec` → 30, `m` → 20) when the target has no number.
+`cleanupEmptySessions` memoizes a one-shot legacy-empty cleanup (bounded to 100 scanned records). `GET` reads up to 100 records in stable date/day order, migrates identities without losing removed data, and returns up to 60 nonempty cloud sessions; missing Mongo returns the device-only fallback.
 
-### `lib/session-cache.js` (143 lines)
-Local session cache + local/server merge rules.
-- `SESSION_CACHE_KEY`, `CACHE_SCHEMA_VERSION` (`2`), `MAX_CACHED_SESSIONS` (`400`).
-- `sessionKeyFor(date, day)`, `readTimestamp(value)`.
-- `readSessionEntry(entry, dayId)` — reads the envelope **or** the original bare item map and
-  returns `{ items, updatedAt, programVersion, rekeyed, unmapped }`.
-- `buildSessionEntry(items, updatedAt, programVersion)` — the versioned envelope.
-- `pickNewerSession(localEntry, serverEntry)` — server copy wins only when strictly newer;
-  an exact tie keeps local, and a missing server copy never erases local data.
-- `pruneSessionCache(cached, max)` — keeps the newest `max` entries, returns `{ cache, pruned }`.
-- `readCache()` / `writeCache(sessionKey, entry, max)` — localStorage plumbing.
-  `writeCache` returns `{ ok, pruned, quotaExceeded }` instead of throwing, and retries once
-  after pruning, so a `QuotaExceededError` surfaces as a real error state.
+### `app/api/status/route.js`
 
-### `tests/workout.test.js` (553 lines, 56 tests)
-Vitest suite; single runner `npm test`. Covers `hasSessionData`, `getDefaultReps`,
-`formatSessionAsText`, the `unit` handling, the item-key/slug identity and migration, and
-every new validator: date/day/item-key rejection (including `{"$ne":null}`), query and payload
-injection, item shape and numeric bounds, oversize/malformed JSON bodies, and the
-cache merge/prune rules.
+`GET` returns only configured/connected booleans, without driver details.
 
-### `vitest.config.mjs` (17 lines)
-Vitest config: `@` → repo root alias (so `lib/*` modules resolve their `@/lib/...` imports),
-`environment: "node"`, `include: ["tests/**/*.test.js"]`.
+### `components/Modal.jsx`
 
-### `next.config.mjs` (41 lines)
-Security headers on every route via `headers()`: `Content-Security-Policy` (no
-`'unsafe-eval'` in production, `'unsafe-inline'` for styles **and** for Next's bootstrap
-scripts, `ws:` connect only in dev), `X-Frame-Options: DENY`,
-`X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin`,
-`Permissions-Policy: camera=(), microphone=(), geolocation=()`.
+`Modal` uses a native dialog for focus trapping, Escape/backdrop dismissal and focus restoration; its mount/cleanup effect records the invoking element, opens/closes the dialog, explicitly restores focus with preventScroll, and restores body scroll. Close/cancel/click callbacks call the provided close action.
 
-### `eslint.config.mjs` (24 lines)
-Flat config from `eslint-config-next/core-web-vitals`, with `globalIgnores` for `.next`,
-`out`, `build`, `node_modules`, `next-env.d.ts`. `react-hooks/set-state-in-effect` is off
-because post-mount hydration (date, weight unit, previous-session ghost, status) is
-deliberate here — the alternative is reading browser-only APIs during render, which breaks
-SSR. Run via `npm run lint`.
+### `components/ExerciseGuide.jsx`
 
-### `.env.example`
-Example env file (tracked; `.gitignore` un-ignores it). No functions.
-Declares `MONGODB_URI=mongodb://localhost:27017/workout_tracker`.
+`ExerciseGuide` mounts only when requested and displays one individual illustration plus prescription, movement/posture cues and applicable per-side notes. Image load/error callbacks show accessible feedback; instructions remain available on failure. Links to NASM/NASS are supplied for relevant checked references.
 
-### `.gitignore`
-Ignores `node_modules`, `.next`, `.env*` (except `!.env.example`), `.DS_Store`.
+### `components/NumericInput.jsx`
+
+`NumericInput` holds an in-progress decimal draft locally; change callback validates and reports normalized values, blur callback finishes the draft without destroying fractional typing. Max bounds and accessible labels come from the caller.
+
+### `components/SetTracker.jsx`
+
+`SetTracker` renders per-exercise set entry and previous values. `changeSet` atomically changes one set; `changeWeight` fills only empty or matching unfinished later weights; `changeCount` changes visible set count while retaining hidden values for undo. Button callbacks apply previous weight/reps in one update, step within bounds, and mark only the selected set complete. Timed work uses seconds; bodyweight work omits weight fields.
+
+### `lib/program.js`
+
+Program version 3, containing exactly the supplied days: day1 has 6 sections/23 items, day2 6/25, day3 8/28 (76 entries, 66 unique illustrated movements). Old routine/Day 4 is absent from active selection.
+- `simple`, `sets`, `cardio` — build check-off, set and cardio entries; sets supports ranges, units and per-side/foot/direction suffixes.
+- `hang`, `hipStretch`, `hamstringStretch` — shared finishing-entry builders.
+- `canonicalKey` — explicit unambiguous legacy-name aliases; `decorateProgram` stamps stable day:id keys and applicable frozen historical positions.
+- `hasLoggedValue`, `hasSessionData` — detect actually recorded values/completion rather than empty placeholders.
+- `getProgramDay` — current day or null (never relabels a removed day).
+- `getItemByLegacyKey` — resolves frozen old positions, never replacement array positions.
+- `getArchivedItem` — recovers original exercise names/units/field labels for export.
+- `migrateItems` — retains unknown/removed entries and key collisions; current keys win while original conflicting values remain exportable.
+
+### `lib/legacy-items.json`
+
+Frozen old per-day position → key/name/kind/unit/field-label metadata, including archived Day 4. Prevents historical logs being silently reassigned after reordering. Data only; no functions.
+
+### `lib/exercise-guides.js`
+
+`EXERCISE_GUIDES` maps 66 stable guide IDs to separate local image paths/dimensions, movement instructions, cues and optional reference links. `getExerciseGuide` returns an own-property entry or null. No combined atlas is referenced by the application.
+
+### `lib/workout-input.js`
+
+`isNumberDraft` permits bounded partial decimal input; `finishNumberDraft` normalizes it; `stepValue` clamps steppers to 0–10000; `applyPreviousSet` copies weight/reps atomically without copying completion or an irrelevant weight.
+
+### `lib/workout-progress.js`
+
+`getSetCount` clamps valid set counts to 1–20 and handles malformed/null values; `getItemProgress` counts visible completed sets or simple/cardio completion; `getDayProgress` sums totals/percent; `findFirstUnchecked` returns the earliest unfinished exercise/section or null. Used by UI, progress, collapse and resume navigation.
+
+### `lib/session-sync.js`
+
+`createSaveQueue` constructs an injected, testable queue. Nested `queue` debounces latest snapshots per session; `flush` serializes same-session writes, suppresses stale Saved statuses, handles sync/async failures and drains newer pending snapshots; `flushAll` independently flushes each session and forwards keepalive. Local snapshots remain the recovery mechanism if the browser cannot finish a cloud write on unload.
+
+### `lib/session-cache.js`
+
+`sessionKeyFor` builds date|day identity; `storage` safely locates localStorage; `readTimestamp` parses bounded numeric/ISO timestamps; `readSessionEntry` reads old bare maps or versioned envelopes and migrates identities; `buildSessionEntry` constructs schema-2 envelopes; `pickNewerSession` keeps local on ties and never erases it with an absent server copy; `mergeSessionHistory` reconciles both sources before filtering empty tombstones; `pruneSessionCache` retains the newest configured count (400 default); `readCache` tolerates unavailable/corrupt storage; `writeCache` saves/reports quota and pruning outcomes. Empty envelopes retain an explicit clear until the server deletion syncs.
+
+### `lib/session-format.js`
+
+`normalizeWeightUnit`, `normalizeRepsUnit` validate vocabularies; `repsUnitLabel`, `formatWeightValue`, `formatRepsValue` label numbers; `formatSessionAsText` prints migrated current data plus original removed exercise values and archived-day records, including completed cardio without notes; `getDefaultReps` provides numeric target suggestions with unit-specific fallback. Unit selection labels values and does not convert stored weights.
+
+### `lib/mongodb.js`
+
+`ensureIndexes` memoizes unique date/day and history sort indexes with a nonunique fallback for legacy duplicates; `getDatabase` lazily connects to workout_tracker and resets failed connection/index promises; `checkMongoStatus` returns configured/connected booleans and pings without exposing driver details.
+
+### `lib/validate.js`
+
+`isDateKey` validates real Gregorian ISO dates; `isDayKey` accepts supported/historical day strings; `isItemKey` accepts bounded slug or frozen positional formats. `fail` builds fixed-code rejection; `isPlainObject` and `isBoundedNumber` check primitive shapes/ranges; `coerceNumberInput` normalizes numeric input; `sanitizeSet`, `sanitizeItem`, `sanitizeItems` whitelist fields and enforce bounds; `validateSessionQuery`, `validateSessionPayload` validate request identity/items/version; `byteLength` measures UTF-8; `readJsonBody` returns 400/413-safe results with a 256 KB cap.
+
+### `next.config.mjs`
+
+Security configuration and CSP; async `headers` applies CSP, frame denial, nosniff, referrer and permissions headers. NODE_ENV controls development websocket/eval allowances. Images are local WebP; no third-party image host configuration.
+
+### `vitest.config.mjs`
+
+Single test runner configuration: root @ alias, Node default environment and tests/**/*.test.{js,jsx}; component/page tests select jsdom per file. The pre-transform plugin's `transform` compiles the Next JSX page with Oxc for integration tests.
+
+### `eslint.config.mjs`
+
+Flat Next core-web-vitals configuration, generated/dependency ignores and intentional effect-hydration exception. No custom functions.
 
 ### `jsconfig.json`
-Path alias config **and** the TypeScript project used by `npm run typecheck`
-(`tsc -p jsconfig.json`): `baseUrl: "."`, `@/*` → `./*` (used for `@/lib/...` imports),
-plus `allowJs: true` / `checkJs: false` / `noEmit` / `skipLibCheck`.
 
-### `package.json` / `package-lock.json`
-Manifest + lockfile. Deps: `next`, `react`, `react-dom`, `mongodb`. DevDeps: `vitest`,
-`eslint`, `eslint-config-next`, `typescript`. Scripts: `dev`, `build`, `start`, `lint`
-(`eslint .`), `typecheck` (`tsc -p jsconfig.json`), `test` (`vitest run`).
+Root @ alias, allowJs/checkJs:false/noEmit, preserved JSX, and source/test inclusion. npm run typecheck provides parsing/project checks rather than full JavaScript type checking. No functions.
 
-### `AGENTS.md` / `CLAUDE.md`
-Repo-local AI guidelines (`CLAUDE.md` is a one-line `@AGENTS.md` pointer).
-Docs conventions used here: `docs/` folder, per-file purpose+functions, separate
-Environment Variables section.
+### `package.json`
 
-### `a.html`
-Deleted (`git rm a.html`). It was a 1621-line dead duplicate of the program and UI using a
-different `STORAGE_KEY`, with no API sync, no history/export and an `info` item kind the
-React app cannot render.
+Commands dev/build/start/lint/typecheck/test; Next/React/Mongo runtime and ESLint/TypeScript/Vitest/Testing Library/jsdom development dependencies. No functions.
+
+### `package-lock.json`
+
+Reproducible npm dependency graph; Next resolves to 16.4.2 after compatible security refresh. No functions.
+
+### `.env.example`
+
+Optional MONGODB_URI configuration example; no credential values committed. No functions.
+
+### `.gitignore`
+
+Ignores node_modules, build outputs, local environment files, generated Next declarations and OS metadata. No functions.
+
+### `AGENTS.md`
+
+Repository AI behavior, documentation, authorization and local-commit/push instructions. No functions.
+
+### `CLAUDE.md`
+
+Pointer to AGENTS.md. No functions.
+
+### `README.md`
+
+Run/test instructions, three-day workflow, images, storage/history behavior and documentation links. No functions.
+
+### `docs/architecture.md`
+
+This complete file/function inventory, storage/runtime notes, environment variables and verification record. No functions.
+
+### `docs/suggestions.md`
+
+Dated implemented improvements, accepted risks and outstanding vulnerability/improvement log. No functions.
+
+### `docs/exercise-images.md`
+
+Imagegen provenance, full prompt set, targeted visual corrections, source references and individual-crop workflow. No functions.
+
+### `docs/exercise-image-sources.json`
+
+Every individual image ID, approved source atlas and exact pixel crop rectangle. Data only; no functions.
+
+### `tests/workout.test.js`
+
+Original logic/validation/cache/export suite (56 tests), updated for the replacement routine. Test helpers params/makeRequest construct URL/body fixtures; test callbacks cover data detection, units, request bounds/injection, identity migration, cache selection and pruning.
+
+### `tests/program-refresh.test.js`
+
+Program order/dosage, all individual assets, frozen legacy keys/collisions, archived export, completed cardio, progress/resume, calendar and history reconciliation tests. Helpers allItems/item select explicit fixtures.
+
+### `tests/workout-input.test.js`
+
+Partial decimals, bounded entry/stepping and atomic previous values. No named helper functions; describe/it callbacks are test cases.
+
+### `tests/session-sync.test.js`
+
+Debounce, serialized writes, stale response suppression, per-session independence, keepalive and recovery tests. deferred controls promise resolution; afterEach restores timers/mocks.
+
+### `tests/session-api.test.js`
+
+Real session handlers with mocked Mongo: rejection before DB access, normalized version-3 writes, exact-session clearing, local-only fallback, cloud reads and fixed error responses. request builds POST fixtures; beforeEach/afterEach reset mocks.
+
+### `tests/components.test.jsx`
+
+Real DOM input/guide tests: fractional typing, safe weight carry-forward, independent completion, previous-value copy, undoing removal, timed/bodyweight rows, single image loading/error, dialog dismissal and focus restoration. Entry and GuideTrigger are the stateful harnesses; beforeEach shims native dialogs; afterEach cleans up.
+
+### `tests/page.test.jsx`
+
+Daily resume integration tests for `WorkoutPage`: saved-progress restoration, one-time scrolling, rapid day switching, interaction cancellation and manual Next focus. `advance` flushes React work with the test clock; setup provides an isolated local cache, device-only fetch and DOM geometry; cleanup restores globals and timers.
+
+## Individual exercise images
+
+Each file below contains only its own exercise illustration. All are locally served and loaded only when the guide opens. Raster assets contain no functions.
+
+| File | Purpose | Functions |
+|---|---|---|
+| `public/exercise-guides/ankle-inversion-eversion.webp` | Band ankle inversion + eversion — start/movement/hold reference | None |
+| `public/exercise-guides/ankle-rocks.webp` | Ankle rocks — start/movement/hold reference | None |
+| `public/exercise-guides/back-extension.webp` | Back Extension — start/movement/hold reference | None |
+| `public/exercise-guides/band-external-rotation.webp` | Band external rotation — start/movement/hold reference | None |
+| `public/exercise-guides/band-pull-apart.webp` | Band pull-aparts — start/movement/hold reference | None |
+| `public/exercise-guides/bike-elliptical.webp` | Bike / elliptical — start/movement/hold reference | None |
+| `public/exercise-guides/bird-dog.webp` | Bird Dog — start/movement/hold reference | None |
+| `public/exercise-guides/bodyweight-squat.webp` | Bodyweight squats — start/movement/hold reference | None |
+| `public/exercise-guides/bulgarian.webp` | Bulgarian Split Squat — start/movement/hold reference | None |
+| `public/exercise-guides/cable-lateral.webp` | Cable Lateral Raise — start/movement/hold reference | None |
+| `public/exercise-guides/calf-stretch.webp` | Calf stretch — start/movement/hold reference | None |
+| `public/exercise-guides/child-side-reach.webp` | Child’s Pose + side reach — start/movement/hold reference | None |
+| `public/exercise-guides/db-shrug.webp` | DB Shrug — start/movement/hold reference | None |
+| `public/exercise-guides/dead-bug.webp` | Dead Bug — start/movement/hold reference | None |
+| `public/exercise-guides/dead-hang.webp` | Dead hang — start/movement/hold reference | None |
+| `public/exercise-guides/doorway-stretch.webp` | Doorway chest stretch — start/movement/hold reference | None |
+| `public/exercise-guides/elephant-walk.webp` | Elephant walks — start/movement/hold reference | None |
+| `public/exercise-guides/external-rotation.webp` | Cable/Band External Rotation — start/movement/hold reference | None |
+| `public/exercise-guides/face-pull.webp` | Face Pull — start/movement/hold reference | None |
+| `public/exercise-guides/farmer.webp` | Farmer Carry — start/movement/hold reference | None |
+| `public/exercise-guides/flat-db-press.webp` | Flat DB Press — start/movement/hold reference | None |
+| `public/exercise-guides/glute-bridge.webp` | Glute bridges — start/movement/hold reference | None |
+| `public/exercise-guides/hack-squat.webp` | Hack Squat — start/movement/hold reference | None |
+| `public/exercise-guides/hammer-curl.webp` | Hammer Curl — start/movement/hold reference | None |
+| `public/exercise-guides/hamstring-stretch.webp` | Hamstring stretch — start/movement/hold reference | None |
+| `public/exercise-guides/high-low-fly.webp` | High-to-Low Cable Fly — start/movement/hold reference | None |
+| `public/exercise-guides/hip-90-90.webp` | 90/90 hip rotations — start/movement/hold reference | None |
+| `public/exercise-guides/hip-abduction.webp` | Hip Abduction Machine — start/movement/hold reference | None |
+| `public/exercise-guides/hip-adduction.webp` | Hip Adduction Machine — start/movement/hold reference | None |
+| `public/exercise-guides/hip-flexor-stretch.webp` | Hip-flexor stretch — start/movement/hold reference | None |
+| `public/exercise-guides/hip-thrust.webp` | Hip Thrust — start/movement/hold reference | None |
+| `public/exercise-guides/incline-curl.webp` | Incline DB Curl — start/movement/hold reference | None |
+| `public/exercise-guides/incline-db-press.webp` | Incline DB Press — start/movement/hold reference | None |
+| `public/exercise-guides/incline-walk.webp` | Incline treadmill walk — start/movement/hold reference | None |
+| `public/exercise-guides/internal-rotation.webp` | Cable/Band Internal Rotation — start/movement/hold reference | None |
+| `public/exercise-guides/knee-raise.webp` | Hanging Knee Raise — start/movement/hold reference | None |
+| `public/exercise-guides/landmine-press.webp` | Landmine Press — start/movement/hold reference | None |
+| `public/exercise-guides/leg-curl.webp` | Leg Curl — start/movement/hold reference | None |
+| `public/exercise-guides/leg-press.webp` | Leg Press — start/movement/hold reference | None |
+| `public/exercise-guides/light-face-pull.webp` | Light band face pull — start/movement/hold reference | None |
+| `public/exercise-guides/neck-isometrics.webp` | Neck isometrics — start/movement/hold reference | None |
+| `public/exercise-guides/neutral-pulldown.webp` | Neutral-Grip Lat Pulldown — start/movement/hold reference | None |
+| `public/exercise-guides/one-arm-cable-row.webp` | One-Arm Cable Row — start/movement/hold reference | None |
+| `public/exercise-guides/overhead-triceps.webp` | Overhead Cable Triceps Extension — start/movement/hold reference | None |
+| `public/exercise-guides/pallof.webp` | Pallof Press — start/movement/hold reference | None |
+| `public/exercise-guides/pronation.webp` | DB Pronation/Supination — start/movement/hold reference | None |
+| `public/exercise-guides/psoas.webp` | Seated Psoas March — start/movement/hold reference | None |
+| `public/exercise-guides/pulldown-assisted.webp` | Lat Pulldown / Assisted Pull-Up — start/movement/hold reference | None |
+| `public/exercise-guides/push-up-plus.webp` | Push-up Plus — start/movement/hold reference | None |
+| `public/exercise-guides/rdl.webp` | Romanian Deadlift — start/movement/hold reference | None |
+| `public/exercise-guides/reverse-cable-fly.webp` | Reverse Cable Fly — start/movement/hold reference | None |
+| `public/exercise-guides/reverse-lunge.webp` | Reverse lunge — start/movement/hold reference | None |
+| `public/exercise-guides/rope-pushdown.webp` | Rope Triceps Pushdown — start/movement/hold reference | None |
+| `public/exercise-guides/seated-calf.webp` | Seated Calf Raise — start/movement/hold reference | None |
+| `public/exercise-guides/seated-row.webp` | Seated Cable Row — start/movement/hold reference | None |
+| `public/exercise-guides/short-foot.webp` | Short-foot / arch hold — start/movement/hold reference | None |
+| `public/exercise-guides/side-plank.webp` | Side Plank — start/movement/hold reference | None |
+| `public/exercise-guides/standing-calf.webp` | Standing Calf Raise — start/movement/hold reference | None |
+| `public/exercise-guides/suitcase.webp` | Suitcase Carry — start/movement/hold reference | None |
+| `public/exercise-guides/supported-row.webp` | Chest-Supported Row — start/movement/hold reference | None |
+| `public/exercise-guides/thoracic-extension.webp` | Thoracic extension — start/movement/hold reference | None |
+| `public/exercise-guides/tibialis.webp` | Tibialis Raise — start/movement/hold reference | None |
+| `public/exercise-guides/treadmill-rower.webp` | Treadmill / rower — start/movement/hold reference | None |
+| `public/exercise-guides/wall-slides.webp` | Wall slides — start/movement/hold reference | None |
+| `public/exercise-guides/wrist-curl.webp` | Wrist Curl — start/movement/hold reference | None |
+| `public/exercise-guides/y-raise.webp` | Cable/Prone Y-Raise — start/movement/hold reference | None |
+
+## Approved source artwork
+
+Preserved for reproducible trimming via `docs/exercise-image-sources.json`; not loaded by the app. No functions.
+
+- `docs/exercise-atlases/arms-and-control.webp` — original approved six-exercise source sheet.
+- `docs/exercise-atlases/core.webp` — original approved six-exercise source sheet.
+- `docs/exercise-atlases/finish.webp` — original approved six-exercise source sheet.
+- `docs/exercise-atlases/lower-accessories-v2.webp` — original approved six-exercise source sheet.
+- `docs/exercise-atlases/lower-strength-v2.webp` — original approved six-exercise source sheet.
+- `docs/exercise-atlases/mobility.webp` — original approved six-exercise source sheet.
+- `docs/exercise-atlases/pull.webp` — original approved six-exercise source sheet.
+- `docs/exercise-atlases/push.webp` — original approved six-exercise source sheet.
+- `docs/exercise-atlases/resilience.webp` — original approved six-exercise source sheet.
+- `docs/exercise-atlases/upper-accessories.webp` — original approved six-exercise source sheet.
+- `docs/exercise-atlases/warm-up.webp` — original approved six-exercise source sheet.
+
+## Storage and program compatibility
+
+- Program version 3 replaces the four-day routine. Current keys are stable day:id identities; old positional keys resolve against frozen historical metadata, not the new exercise order. Unmapped/colliding entries remain exportable.
+- Cache key: workout_tracker_local_cache, schema 2, newest 400 snapshots. Empty versioned entries preserve clears during sync. Cloud history returns at most 60 active records; the client merges locally available records before export/display.
+- Preferences: workout_tracker_weight_unit and workout_tracker_selected_day. Date defaults to the browser's current day after hydration. A removed/unknown remembered day is ignored.
+- Reads cannot overwrite edits made while they were loading. Same-session writes are serialized. Saved status belongs only to the latest revision of the active session. Device failure does not prevent attempting cloud save; failure and retry remain visible.
+- Auto-resume lands once after session loading and a 300 ms interaction grace period, without repeatedly jumping while entering data. The nested cancelAutomaticResume listener records pointer/keyboard/wheel/touch activity and cancels pending automatic scroll timers/frames so navigation or typing is not interrupted. Next opens the first unfinished section on demand, with smooth scrolling unless reduced motion is preferred. Set controls wrap without splitting button labels on phones. Images are absent from the default DOM and mount only in an accessible native dialog.
 
 ## Environment Variables
 
-| Var | Required? | Purpose | Referenced in |
+| Variable | Required? | Purpose | Referenced in |
 |---|---|---|---|
-| `MONGODB_URI` | No — app works fully offline on localStorage without it | Mongo connection string (`workout_tracker` db); enables cloud sync + history | `lib/mongodb.js` (`getDatabase`, `checkMongoStatus`, `ensureIndexes`), `.env.example`, surfaced in `app/page.js` offline banner and `app/api/session/route.js` local-save message |
+| MONGODB_URI | No | Optional MongoDB connection for workout_tracker cloud sync/history; absent or unreachable uses the device-only API fallback | lib/mongodb.js:getDatabase/checkMongoStatus; .env.example |
+| NODE_ENV | Framework-provided | Production/development CSP differences | next.config.mjs:isDev |
 
-Verified via grep: `MONGODB_URI` is the only `process.env` var in the codebase.
-No auth/permission env vars (no auth system).
+No image-generation key is required at runtime. There are no Manager or auth environment variables on main. Local environment values are never committed.
 
 ## Verification
 
-`npm run lint` (0 errors, 0 warnings) · `npm test` (56 tests) · `npm run typecheck` ·
-`npm run build` — all from the repo root.
+Single entry point: `npm test` (95 tests across seven suites). The Vitest `next-page-jsx` plugin's `transform` handles Next's JSX-in-page.js convention using Vite's built-in Oxc transform so page integration tests run alongside component/API/helper tests. Also run `npm run lint`, `npm run typecheck` and `npm run build`. `npm audit --omit=dev` reports zero runtime vulnerabilities after the compatible dependency refresh. Five high development-tool dependency audit entries remain in the lint chain; see docs/suggestions.md.
+
+Browser verification uses an isolated localhost origin with MONGODB_URI explicitly unset; tests do not write the real database. Verified: no default images, individually cropped guide rendering/dismissal and keyboard focus return, decimal entry, independent set completion, saved state after reload, automatic first-unchecked resume below sticky controls, quick day switching, manual Next focus, mobile layout and actual text export. Synthetic test entries were cleared through the UI. All 66 image files were decoded and checked against their registry dimensions. The development watcher hit a host open-file limit; production build/runtime are used for browser checks.

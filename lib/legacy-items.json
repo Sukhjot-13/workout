@@ -1,0 +1,728 @@
+{
+  "day1": {
+    "0:0": {
+      "key": "day1:brisk-treadmill-walk",
+      "name": "Brisk treadmill walk",
+      "kind": "simple",
+      "unit": "reps"
+    },
+    "0:1": {
+      "key": "day1:ankle-rocks",
+      "name": "Ankle rocks",
+      "kind": "simple",
+      "unit": "reps"
+    },
+    "0:2": {
+      "key": "day1:squat-to-stand",
+      "name": "Squat-to-stand",
+      "kind": "simple",
+      "unit": "reps"
+    },
+    "0:3": {
+      "key": "day1:cat-cow",
+      "name": "Cat-cow",
+      "kind": "simple",
+      "unit": "reps"
+    },
+    "0:4": {
+      "key": "day1:wall-slides",
+      "name": "Wall slides",
+      "kind": "simple",
+      "unit": "reps"
+    },
+    "0:5": {
+      "key": "day1:push-up-plus",
+      "name": "Push-up plus",
+      "kind": "simple",
+      "unit": "reps"
+    },
+    "0:6": {
+      "key": "day1:bodyweight-squats",
+      "name": "Bodyweight squats",
+      "kind": "simple",
+      "unit": "reps"
+    },
+    "1:0": {
+      "key": "day1:medicine-ball-chest-throw",
+      "name": "Medicine-ball chest throw",
+      "kind": "sets",
+      "unit": "reps"
+    },
+    "2:0": {
+      "key": "day1:a-goblet-squat-hack-squat",
+      "name": "A. Goblet Squat / Hack Squat",
+      "kind": "sets",
+      "unit": "reps"
+    },
+    "2:1": {
+      "key": "day1:b-incline-dumbbell-press",
+      "name": "B. Incline Dumbbell Press",
+      "kind": "sets",
+      "unit": "reps"
+    },
+    "2:2": {
+      "key": "day1:c-chest-supported-row",
+      "name": "C. Chest-Supported Row",
+      "kind": "sets",
+      "unit": "reps"
+    },
+    "2:3": {
+      "key": "day1:d-romanian-deadlift",
+      "name": "D. Romanian Deadlift",
+      "kind": "sets",
+      "unit": "reps"
+    },
+    "2:4": {
+      "key": "day1:e-neutral-grip-lat-pulldown",
+      "name": "E. Neutral-Grip Lat Pulldown",
+      "kind": "sets",
+      "unit": "reps"
+    },
+    "3:0": {
+      "key": "day1:cable-or-db-lateral-raise",
+      "name": "Cable or DB Lateral Raise",
+      "kind": "sets",
+      "unit": "reps"
+    },
+    "3:1": {
+      "key": "day1:rope-triceps-pushdown",
+      "name": "Rope Triceps Pushdown",
+      "kind": "sets",
+      "unit": "reps"
+    },
+    "3:2": {
+      "key": "day1:incline-dumbbell-curl",
+      "name": "Incline Dumbbell Curl",
+      "kind": "sets",
+      "unit": "reps"
+    },
+    "4:0": {
+      "key": "day1:db-wrist-extension",
+      "name": "DB Wrist Extension",
+      "kind": "sets",
+      "unit": "reps"
+    },
+    "4:1": {
+      "key": "day1:db-pronation-supination",
+      "name": "DB Pronation/Supination",
+      "kind": "sets",
+      "unit": "reps"
+    },
+    "5:0": {
+      "key": "day1:standing-calf-raise",
+      "name": "Standing Calf Raise",
+      "kind": "sets",
+      "unit": "reps"
+    },
+    "5:1": {
+      "key": "day1:tibialis-raise",
+      "name": "Tibialis Raise",
+      "kind": "sets",
+      "unit": "reps"
+    },
+    "6:0": {
+      "key": "day1:pallof-press",
+      "name": "Pallof Press",
+      "kind": "sets",
+      "unit": "reps"
+    },
+    "6:1": {
+      "key": "day1:dead-bug",
+      "name": "Dead Bug",
+      "kind": "sets",
+      "unit": "reps"
+    },
+    "7:0": {
+      "key": "day1:farmer-carry",
+      "name": "Farmer Carry",
+      "kind": "sets",
+      "unit": "sec"
+    },
+    "8:0": {
+      "key": "day1:cardio",
+      "name": "Cardio",
+      "kind": "result",
+      "unit": "reps",
+      "label1": "Actual cardio",
+      "label2": "Notes"
+    },
+    "9:0": {
+      "key": "day1:dead-hang",
+      "name": "Dead Hang",
+      "kind": "sets",
+      "unit": "sec"
+    },
+    "9:1": {
+      "key": "day1:doorway-pec-stretch",
+      "name": "Doorway Pec Stretch",
+      "kind": "sets",
+      "unit": "sec"
+    },
+    "9:2": {
+      "key": "day1:kneeling-hip-flexor-stretch",
+      "name": "Kneeling Hip-Flexor Stretch",
+      "kind": "sets",
+      "unit": "sec"
+    },
+    "9:3": {
+      "key": "day1:lat-stretch",
+      "name": "Lat Stretch",
+      "kind": "sets",
+      "unit": "sec"
+    }
+  },
+  "day2": {
+    "0:0": {
+      "key": "day2:bike-elliptical",
+      "name": "Bike/elliptical",
+      "kind": "simple",
+      "unit": "reps"
+    },
+    "0:1": {
+      "key": "day2:90-90-hip-rotations",
+      "name": "90/90 hip rotations",
+      "kind": "simple",
+      "unit": "reps"
+    },
+    "0:2": {
+      "key": "day2:elephant-walks",
+      "name": "Elephant walks",
+      "kind": "simple",
+      "unit": "reps"
+    },
+    "0:3": {
+      "key": "day2:ankle-rocks",
+      "name": "Ankle rocks",
+      "kind": "simple",
+      "unit": "reps"
+    },
+    "0:4": {
+      "key": "day2:wall-slides",
+      "name": "Wall slides",
+      "kind": "simple",
+      "unit": "reps"
+    },
+    "0:5": {
+      "key": "day2:glute-bridges",
+      "name": "Glute bridges",
+      "kind": "simple",
+      "unit": "reps"
+    },
+    "0:6": {
+      "key": "day2:scapular-pulldowns",
+      "name": "Scapular pulldowns",
+      "kind": "simple",
+      "unit": "reps"
+    },
+    "1:0": {
+      "key": "day2:medicine-ball-rotational-throw",
+      "name": "Medicine-Ball Rotational Throw",
+      "kind": "sets",
+      "unit": "reps"
+    },
+    "2:0": {
+      "key": "day2:a-bulgarian-split-squat",
+      "name": "A. Bulgarian Split Squat",
+      "kind": "sets",
+      "unit": "reps"
+    },
+    "2:1": {
+      "key": "day2:b-hip-thrust",
+      "name": "B. Hip Thrust",
+      "kind": "sets",
+      "unit": "reps"
+    },
+    "2:2": {
+      "key": "day2:c-dumbbell-shoulder-press-or-landmine-press",
+      "name": "C. Dumbbell Shoulder Press OR Landmine Press",
+      "kind": "sets",
+      "unit": "reps"
+    },
+    "2:3": {
+      "key": "day2:d-lat-pulldown-assisted-pull-up",
+      "name": "D. Lat Pulldown / Assisted Pull-Up",
+      "kind": "sets",
+      "unit": "reps"
+    },
+    "2:4": {
+      "key": "day2:e-seated-cable-row",
+      "name": "E. Seated Cable Row",
+      "kind": "sets",
+      "unit": "reps"
+    },
+    "2:5": {
+      "key": "day2:f-leg-curl",
+      "name": "F. Leg Curl",
+      "kind": "sets",
+      "unit": "reps"
+    },
+    "3:0": {
+      "key": "day2:hip-abduction",
+      "name": "Hip Abduction",
+      "kind": "sets",
+      "unit": "reps"
+    },
+    "3:1": {
+      "key": "day2:hip-adduction",
+      "name": "Hip Adduction",
+      "kind": "sets",
+      "unit": "reps"
+    },
+    "4:0": {
+      "key": "day2:face-pull",
+      "name": "Face Pull",
+      "kind": "sets",
+      "unit": "reps"
+    },
+    "4:1": {
+      "key": "day2:cable-external-rotation",
+      "name": "Cable External Rotation",
+      "kind": "sets",
+      "unit": "reps"
+    },
+    "4:2": {
+      "key": "day2:cable-internal-rotation",
+      "name": "Cable Internal Rotation",
+      "kind": "sets",
+      "unit": "reps"
+    },
+    "5:0": {
+      "key": "day2:seated-calf-raise",
+      "name": "Seated Calf Raise",
+      "kind": "sets",
+      "unit": "reps"
+    },
+    "6:0": {
+      "key": "day2:seated-psoas-march-or-standing-cable-knee-drive",
+      "name": "Seated Psoas March OR Standing Cable Knee Drive",
+      "kind": "sets",
+      "unit": "reps"
+    },
+    "7:0": {
+      "key": "day2:side-plank",
+      "name": "Side Plank",
+      "kind": "sets",
+      "unit": "sec"
+    },
+    "7:1": {
+      "key": "day2:bird-dog",
+      "name": "Bird Dog",
+      "kind": "sets",
+      "unit": "reps"
+    },
+    "8:0": {
+      "key": "day2:cardio",
+      "name": "Cardio",
+      "kind": "result",
+      "unit": "reps",
+      "label1": "Actual cardio",
+      "label2": "Notes"
+    },
+    "9:0": {
+      "key": "day2:dead-hang",
+      "name": "Dead Hang",
+      "kind": "sets",
+      "unit": "sec"
+    },
+    "9:1": {
+      "key": "day2:thoracic-extension",
+      "name": "Thoracic Extension",
+      "kind": "sets",
+      "unit": "reps"
+    },
+    "9:2": {
+      "key": "day2:hamstring-stretch",
+      "name": "Hamstring Stretch",
+      "kind": "sets",
+      "unit": "sec"
+    },
+    "9:3": {
+      "key": "day2:hip-flexor-stretch",
+      "name": "Hip-Flexor Stretch",
+      "kind": "sets",
+      "unit": "sec"
+    },
+    "9:4": {
+      "key": "day2:calf-stretch",
+      "name": "Calf Stretch",
+      "kind": "sets",
+      "unit": "sec"
+    }
+  },
+  "day3": {
+    "0:0": {
+      "key": "day3:rowing-machine-or-treadmill",
+      "name": "Rowing machine or treadmill",
+      "kind": "simple",
+      "unit": "reps"
+    },
+    "0:1": {
+      "key": "day3:ankle-rocks",
+      "name": "Ankle rocks",
+      "kind": "simple",
+      "unit": "reps"
+    },
+    "0:2": {
+      "key": "day3:world-s-greatest-stretch",
+      "name": "World’s Greatest Stretch",
+      "kind": "simple",
+      "unit": "reps"
+    },
+    "0:3": {
+      "key": "day3:push-up-plus",
+      "name": "Push-Up Plus",
+      "kind": "simple",
+      "unit": "reps"
+    },
+    "0:4": {
+      "key": "day3:wall-slides",
+      "name": "Wall slides",
+      "kind": "simple",
+      "unit": "reps"
+    },
+    "0:5": {
+      "key": "day3:reverse-lunges",
+      "name": "Reverse lunges",
+      "kind": "simple",
+      "unit": "reps"
+    },
+    "0:6": {
+      "key": "day3:light-face-pulls",
+      "name": "Light face pulls",
+      "kind": "simple",
+      "unit": "reps"
+    },
+    "1:0": {
+      "key": "day3:sled-push",
+      "name": "Sled Push",
+      "kind": "sets",
+      "unit": "m"
+    },
+    "1:1": {
+      "key": "day3:kettlebell-swing",
+      "name": "Kettlebell Swing",
+      "kind": "sets",
+      "unit": "reps"
+    },
+    "1:2": {
+      "key": "day3:medicine-ball-slam",
+      "name": "Medicine-Ball Slam",
+      "kind": "sets",
+      "unit": "reps"
+    },
+    "2:0": {
+      "key": "day3:a-leg-press-hack-squat",
+      "name": "A. Leg Press / Hack Squat",
+      "kind": "sets",
+      "unit": "reps"
+    },
+    "2:1": {
+      "key": "day3:b-flat-dumbbell-press",
+      "name": "B. Flat Dumbbell Press",
+      "kind": "sets",
+      "unit": "reps"
+    },
+    "2:2": {
+      "key": "day3:c-one-arm-cable-row",
+      "name": "C. One-Arm Cable Row",
+      "kind": "sets",
+      "unit": "reps"
+    },
+    "2:3": {
+      "key": "day3:d-back-extension",
+      "name": "D. Back Extension",
+      "kind": "sets",
+      "unit": "reps"
+    },
+    "2:4": {
+      "key": "day3:e-high-to-low-cable-fly",
+      "name": "E. High-to-Low Cable Fly",
+      "kind": "sets",
+      "unit": "reps"
+    },
+    "3:0": {
+      "key": "day3:reverse-cable-fly-rear-delt-fly",
+      "name": "Reverse Cable Fly / Rear-Delt Fly",
+      "kind": "sets",
+      "unit": "reps"
+    },
+    "3:1": {
+      "key": "day3:cable-prone-y-raise",
+      "name": "Cable/Prone Y-Raise",
+      "kind": "sets",
+      "unit": "reps"
+    },
+    "3:2": {
+      "key": "day3:dumbbell-shrug",
+      "name": "Dumbbell Shrug",
+      "kind": "sets",
+      "unit": "reps"
+    },
+    "4:0": {
+      "key": "day3:hammer-curl",
+      "name": "Hammer Curl",
+      "kind": "sets",
+      "unit": "reps"
+    },
+    "4:1": {
+      "key": "day3:overhead-cable-triceps-extension",
+      "name": "Overhead Cable Triceps Extension",
+      "kind": "sets",
+      "unit": "reps"
+    },
+    "5:0": {
+      "key": "day3:wrist-curl",
+      "name": "Wrist Curl",
+      "kind": "sets",
+      "unit": "reps"
+    },
+    "6:0": {
+      "key": "day3:neck-isometrics-front",
+      "name": "Neck Isometrics — Front",
+      "kind": "sets",
+      "unit": "sec"
+    },
+    "6:1": {
+      "key": "day3:neck-isometrics-back",
+      "name": "Neck Isometrics — Back",
+      "kind": "sets",
+      "unit": "sec"
+    },
+    "6:2": {
+      "key": "day3:neck-isometrics-left-lateral",
+      "name": "Neck Isometrics — Left lateral",
+      "kind": "sets",
+      "unit": "sec"
+    },
+    "6:3": {
+      "key": "day3:neck-isometrics-right-lateral",
+      "name": "Neck Isometrics — Right lateral",
+      "kind": "sets",
+      "unit": "sec"
+    },
+    "6:4": {
+      "key": "day3:rotation-isometric",
+      "name": "Rotation isometric",
+      "kind": "sets",
+      "unit": "sec"
+    },
+    "7:0": {
+      "key": "day3:band-ankle-eversion",
+      "name": "Band Ankle Eversion",
+      "kind": "sets",
+      "unit": "reps"
+    },
+    "7:1": {
+      "key": "day3:band-ankle-inversion",
+      "name": "Band Ankle Inversion",
+      "kind": "sets",
+      "unit": "reps"
+    },
+    "8:0": {
+      "key": "day3:short-foot-arch-doming-exercise",
+      "name": "Short-Foot / Arch-Doming Exercise",
+      "kind": "sets",
+      "unit": "sec"
+    },
+    "8:1": {
+      "key": "day3:optional-toe-yoga",
+      "name": "Optional: Toe yoga",
+      "kind": "sets",
+      "unit": "reps"
+    },
+    "9:0": {
+      "key": "day3:hanging-knee-raise",
+      "name": "Hanging Knee Raise",
+      "kind": "sets",
+      "unit": "reps"
+    },
+    "9:1": {
+      "key": "day3:suitcase-carry",
+      "name": "Suitcase Carry",
+      "kind": "sets",
+      "unit": "sec"
+    },
+    "10:0": {
+      "key": "day3:cardio",
+      "name": "Cardio",
+      "kind": "result",
+      "unit": "reps",
+      "label1": "Actual cardio",
+      "label2": "Notes"
+    },
+    "11:0": {
+      "key": "day3:dead-hang",
+      "name": "Dead Hang",
+      "kind": "sets",
+      "unit": "sec"
+    },
+    "11:1": {
+      "key": "day3:child-s-pose-with-side-reach",
+      "name": "Child’s Pose with side reach",
+      "kind": "sets",
+      "unit": "sec"
+    },
+    "11:2": {
+      "key": "day3:pec-stretch",
+      "name": "Pec stretch",
+      "kind": "sets",
+      "unit": "sec"
+    },
+    "11:3": {
+      "key": "day3:hip-flexor-stretch",
+      "name": "Hip-flexor stretch",
+      "kind": "sets",
+      "unit": "sec"
+    },
+    "11:4": {
+      "key": "day3:hamstring-stretch",
+      "name": "Hamstring stretch",
+      "kind": "sets",
+      "unit": "sec"
+    }
+  },
+  "day4": {
+    "0:0": {
+      "key": "day4:walking-bike-elliptical",
+      "name": "Walking/bike/elliptical",
+      "kind": "simple",
+      "unit": "reps"
+    },
+    "0:1": {
+      "key": "day4:dynamic-hip-ankle-and-shoulder-mobility",
+      "name": "Dynamic hip, ankle and shoulder mobility",
+      "kind": "simple",
+      "unit": "reps"
+    },
+    "1:0": {
+      "key": "day4:sled-push",
+      "name": "Sled Push",
+      "kind": "sets",
+      "unit": "m"
+    },
+    "1:1": {
+      "key": "day4:farmer-carry",
+      "name": "Farmer Carry",
+      "kind": "sets",
+      "unit": "m"
+    },
+    "1:2": {
+      "key": "day4:reverse-lunge",
+      "name": "Reverse Lunge",
+      "kind": "sets",
+      "unit": "reps"
+    },
+    "1:3": {
+      "key": "day4:push-up",
+      "name": "Push-Up",
+      "kind": "sets",
+      "unit": "reps"
+    },
+    "1:4": {
+      "key": "day4:chest-supported-cable-row",
+      "name": "Chest-Supported/Cable Row",
+      "kind": "sets",
+      "unit": "reps"
+    },
+    "1:5": {
+      "key": "day4:lateral-shuffle",
+      "name": "Lateral Shuffle",
+      "kind": "sets",
+      "unit": "sec"
+    },
+    "2:0": {
+      "key": "day4:easy-moderate-cardio",
+      "name": "Easy/moderate cardio",
+      "kind": "result",
+      "unit": "reps",
+      "label1": "Actual cardio",
+      "label2": "Notes"
+    },
+    "3:0": {
+      "key": "day4:bike-rower-intervals",
+      "name": "Bike/rower intervals",
+      "kind": "result",
+      "unit": "reps",
+      "label1": "Actual intervals",
+      "label2": "Notes"
+    },
+    "4:0": {
+      "key": "day4:ankles",
+      "name": "Ankles",
+      "kind": "simple",
+      "unit": "reps"
+    },
+    "4:1": {
+      "key": "day4:calves",
+      "name": "Calves",
+      "kind": "simple",
+      "unit": "reps"
+    },
+    "4:2": {
+      "key": "day4:quads",
+      "name": "Quads",
+      "kind": "simple",
+      "unit": "reps"
+    },
+    "4:3": {
+      "key": "day4:hamstrings",
+      "name": "Hamstrings",
+      "kind": "simple",
+      "unit": "reps"
+    },
+    "4:4": {
+      "key": "day4:adductors",
+      "name": "Adductors",
+      "kind": "simple",
+      "unit": "reps"
+    },
+    "4:5": {
+      "key": "day4:glutes",
+      "name": "Glutes",
+      "kind": "simple",
+      "unit": "reps"
+    },
+    "4:6": {
+      "key": "day4:hip-flexors",
+      "name": "Hip flexors",
+      "kind": "simple",
+      "unit": "reps"
+    },
+    "4:7": {
+      "key": "day4:thoracic-spine",
+      "name": "Thoracic spine",
+      "kind": "simple",
+      "unit": "reps"
+    },
+    "4:8": {
+      "key": "day4:lats",
+      "name": "Lats",
+      "kind": "simple",
+      "unit": "reps"
+    },
+    "4:9": {
+      "key": "day4:pecs",
+      "name": "Pecs",
+      "kind": "simple",
+      "unit": "reps"
+    },
+    "4:10": {
+      "key": "day4:shoulders",
+      "name": "Shoulders",
+      "kind": "simple",
+      "unit": "reps"
+    },
+    "4:11": {
+      "key": "day4:wrists",
+      "name": "Wrists",
+      "kind": "simple",
+      "unit": "reps"
+    },
+    "4:12": {
+      "key": "day4:dead-hang",
+      "name": "Dead Hang",
+      "kind": "sets",
+      "unit": "sec"
+    }
+  }
+}

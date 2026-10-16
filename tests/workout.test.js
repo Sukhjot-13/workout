@@ -357,7 +357,7 @@ describe("formatSessionAsText", () => {
       program
     );
     expect(text).toContain("2026-09-26");
-    expect(text).toContain("✓ Brisk treadmill walk");
+    expect(text).toContain("✓ Incline treadmill walk");
     expect(text).toContain("Set 1: 20kg × 10 reps ✓");
     expect(text).not.toContain("Athletic activation");
   });
@@ -432,14 +432,15 @@ describe("migrateItems", () => {
 });
 
 describe("program item identity", () => {
-  it("gives every item a unique stable key and a legacy positional key", () => {
+  it("gives every item a unique stable key and preserves applicable historical positions", () => {
     for (const [dayId, day] of Object.entries(PROGRAM)) {
       const keys = day.sections.flatMap((s) => s.items.map((i) => i.key));
       expect(new Set(keys).size, dayId).toBe(keys.length);
       for (const key of keys) expect(key.startsWith(`${dayId}:`)).toBe(true);
       for (const section of day.sections) {
         for (const item of section.items) {
-          expect(item.legacyKey).toMatch(/^\d+:\d+$/);
+          if (item.legacyKey !== undefined) expect(item.legacyKey).toMatch(/^\d+:\d+$/);
+          expect(item.guideId).toBeTruthy();
         }
       }
     }

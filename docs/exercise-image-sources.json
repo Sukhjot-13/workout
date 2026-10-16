@@ -1,0 +1,530 @@
+[
+  {
+    "id": "incline-walk",
+    "atlas": "warm-up.webp",
+    "left": 1,
+    "top": 1,
+    "width": 536,
+    "height": 510
+  },
+  {
+    "id": "bike-elliptical",
+    "atlas": "warm-up.webp",
+    "left": 539,
+    "top": 1,
+    "width": 487,
+    "height": 510
+  },
+  {
+    "id": "ankle-rocks",
+    "atlas": "warm-up.webp",
+    "left": 1028,
+    "top": 1,
+    "width": 507,
+    "height": 510
+  },
+  {
+    "id": "wall-slides",
+    "atlas": "warm-up.webp",
+    "left": 1,
+    "top": 513,
+    "width": 536,
+    "height": 510
+  },
+  {
+    "id": "band-pull-apart",
+    "atlas": "warm-up.webp",
+    "left": 539,
+    "top": 513,
+    "width": 487,
+    "height": 510
+  },
+  {
+    "id": "bodyweight-squat",
+    "atlas": "warm-up.webp",
+    "left": 1028,
+    "top": 513,
+    "width": 507,
+    "height": 510
+  },
+  {
+    "id": "hip-90-90",
+    "atlas": "mobility.webp",
+    "left": 1,
+    "top": 1,
+    "width": 510,
+    "height": 510
+  },
+  {
+    "id": "elephant-walk",
+    "atlas": "mobility.webp",
+    "left": 513,
+    "top": 1,
+    "width": 510,
+    "height": 510
+  },
+  {
+    "id": "band-external-rotation",
+    "atlas": "mobility.webp",
+    "left": 1025,
+    "top": 1,
+    "width": 510,
+    "height": 510
+  },
+  {
+    "id": "glute-bridge",
+    "atlas": "mobility.webp",
+    "left": 1,
+    "top": 513,
+    "width": 510,
+    "height": 510
+  },
+  {
+    "id": "reverse-lunge",
+    "atlas": "mobility.webp",
+    "left": 513,
+    "top": 513,
+    "width": 510,
+    "height": 510
+  },
+  {
+    "id": "push-up-plus",
+    "atlas": "mobility.webp",
+    "left": 1025,
+    "top": 513,
+    "width": 510,
+    "height": 510
+  },
+  {
+    "id": "light-face-pull",
+    "atlas": "finish.webp",
+    "left": 1,
+    "top": 1,
+    "width": 510,
+    "height": 510
+  },
+  {
+    "id": "dead-hang",
+    "atlas": "finish.webp",
+    "left": 513,
+    "top": 1,
+    "width": 510,
+    "height": 510
+  },
+  {
+    "id": "doorway-stretch",
+    "atlas": "finish.webp",
+    "left": 1025,
+    "top": 1,
+    "width": 510,
+    "height": 510
+  },
+  {
+    "id": "hip-flexor-stretch",
+    "atlas": "finish.webp",
+    "left": 1,
+    "top": 513,
+    "width": 510,
+    "height": 510
+  },
+  {
+    "id": "calf-stretch",
+    "atlas": "finish.webp",
+    "left": 513,
+    "top": 513,
+    "width": 510,
+    "height": 510
+  },
+  {
+    "id": "thoracic-extension",
+    "atlas": "finish.webp",
+    "left": 1025,
+    "top": 513,
+    "width": 510,
+    "height": 510
+  },
+  {
+    "id": "hamstring-stretch",
+    "atlas": "resilience.webp",
+    "left": 1,
+    "top": 1,
+    "width": 510,
+    "height": 470
+  },
+  {
+    "id": "child-side-reach",
+    "atlas": "resilience.webp",
+    "left": 513,
+    "top": 1,
+    "width": 510,
+    "height": 470
+  },
+  {
+    "id": "short-foot",
+    "atlas": "resilience.webp",
+    "left": 1025,
+    "top": 1,
+    "width": 510,
+    "height": 470
+  },
+  {
+    "id": "neck-isometrics",
+    "atlas": "resilience.webp",
+    "left": 1,
+    "top": 473,
+    "width": 510,
+    "height": 550
+  },
+  {
+    "id": "ankle-inversion-eversion",
+    "atlas": "resilience.webp",
+    "left": 513,
+    "top": 473,
+    "width": 510,
+    "height": 550
+  },
+  {
+    "id": "treadmill-rower",
+    "atlas": "resilience.webp",
+    "left": 1025,
+    "top": 473,
+    "width": 510,
+    "height": 550
+  },
+  {
+    "id": "hack-squat",
+    "atlas": "lower-strength-v2.webp",
+    "left": 1,
+    "top": 1,
+    "width": 510,
+    "height": 510
+  },
+  {
+    "id": "rdl",
+    "atlas": "lower-strength-v2.webp",
+    "left": 513,
+    "top": 1,
+    "width": 510,
+    "height": 510
+  },
+  {
+    "id": "bulgarian",
+    "atlas": "lower-strength-v2.webp",
+    "left": 1025,
+    "top": 1,
+    "width": 510,
+    "height": 510
+  },
+  {
+    "id": "hip-thrust",
+    "atlas": "lower-strength-v2.webp",
+    "left": 1,
+    "top": 513,
+    "width": 510,
+    "height": 510
+  },
+  {
+    "id": "leg-press",
+    "atlas": "lower-strength-v2.webp",
+    "left": 513,
+    "top": 513,
+    "width": 510,
+    "height": 510
+  },
+  {
+    "id": "back-extension",
+    "atlas": "lower-strength-v2.webp",
+    "left": 1025,
+    "top": 513,
+    "width": 510,
+    "height": 510
+  },
+  {
+    "id": "leg-curl",
+    "atlas": "lower-accessories-v2.webp",
+    "left": 1,
+    "top": 1,
+    "width": 510,
+    "height": 510
+  },
+  {
+    "id": "hip-abduction",
+    "atlas": "lower-accessories-v2.webp",
+    "left": 513,
+    "top": 1,
+    "width": 510,
+    "height": 510
+  },
+  {
+    "id": "hip-adduction",
+    "atlas": "lower-accessories-v2.webp",
+    "left": 1025,
+    "top": 1,
+    "width": 510,
+    "height": 510
+  },
+  {
+    "id": "standing-calf",
+    "atlas": "lower-accessories-v2.webp",
+    "left": 1,
+    "top": 513,
+    "width": 510,
+    "height": 510
+  },
+  {
+    "id": "seated-calf",
+    "atlas": "lower-accessories-v2.webp",
+    "left": 513,
+    "top": 513,
+    "width": 510,
+    "height": 510
+  },
+  {
+    "id": "tibialis",
+    "atlas": "lower-accessories-v2.webp",
+    "left": 1025,
+    "top": 513,
+    "width": 510,
+    "height": 510
+  },
+  {
+    "id": "incline-db-press",
+    "atlas": "push.webp",
+    "left": 1,
+    "top": 1,
+    "width": 510,
+    "height": 510
+  },
+  {
+    "id": "flat-db-press",
+    "atlas": "push.webp",
+    "left": 513,
+    "top": 1,
+    "width": 510,
+    "height": 510
+  },
+  {
+    "id": "landmine-press",
+    "atlas": "push.webp",
+    "left": 1025,
+    "top": 1,
+    "width": 510,
+    "height": 510
+  },
+  {
+    "id": "cable-lateral",
+    "atlas": "push.webp",
+    "left": 1,
+    "top": 513,
+    "width": 510,
+    "height": 510
+  },
+  {
+    "id": "high-low-fly",
+    "atlas": "push.webp",
+    "left": 513,
+    "top": 513,
+    "width": 510,
+    "height": 510
+  },
+  {
+    "id": "rope-pushdown",
+    "atlas": "push.webp",
+    "left": 1025,
+    "top": 513,
+    "width": 510,
+    "height": 510
+  },
+  {
+    "id": "supported-row",
+    "atlas": "pull.webp",
+    "left": 1,
+    "top": 1,
+    "width": 510,
+    "height": 510
+  },
+  {
+    "id": "neutral-pulldown",
+    "atlas": "pull.webp",
+    "left": 513,
+    "top": 1,
+    "width": 510,
+    "height": 510
+  },
+  {
+    "id": "pulldown-assisted",
+    "atlas": "pull.webp",
+    "left": 1025,
+    "top": 1,
+    "width": 510,
+    "height": 510
+  },
+  {
+    "id": "seated-row",
+    "atlas": "pull.webp",
+    "left": 1,
+    "top": 513,
+    "width": 510,
+    "height": 510
+  },
+  {
+    "id": "one-arm-cable-row",
+    "atlas": "pull.webp",
+    "left": 513,
+    "top": 513,
+    "width": 510,
+    "height": 510
+  },
+  {
+    "id": "face-pull",
+    "atlas": "pull.webp",
+    "left": 1025,
+    "top": 513,
+    "width": 510,
+    "height": 510
+  },
+  {
+    "id": "reverse-cable-fly",
+    "atlas": "upper-accessories.webp",
+    "left": 1,
+    "top": 1,
+    "width": 510,
+    "height": 510
+  },
+  {
+    "id": "y-raise",
+    "atlas": "upper-accessories.webp",
+    "left": 513,
+    "top": 1,
+    "width": 510,
+    "height": 510
+  },
+  {
+    "id": "db-shrug",
+    "atlas": "upper-accessories.webp",
+    "left": 1025,
+    "top": 1,
+    "width": 510,
+    "height": 510
+  },
+  {
+    "id": "incline-curl",
+    "atlas": "upper-accessories.webp",
+    "left": 1,
+    "top": 513,
+    "width": 510,
+    "height": 510
+  },
+  {
+    "id": "hammer-curl",
+    "atlas": "upper-accessories.webp",
+    "left": 513,
+    "top": 513,
+    "width": 510,
+    "height": 510
+  },
+  {
+    "id": "overhead-triceps",
+    "atlas": "upper-accessories.webp",
+    "left": 1025,
+    "top": 513,
+    "width": 510,
+    "height": 510
+  },
+  {
+    "id": "pallof",
+    "atlas": "core.webp",
+    "left": 1,
+    "top": 1,
+    "width": 510,
+    "height": 486
+  },
+  {
+    "id": "dead-bug",
+    "atlas": "core.webp",
+    "left": 513,
+    "top": 1,
+    "width": 510,
+    "height": 486
+  },
+  {
+    "id": "side-plank",
+    "atlas": "core.webp",
+    "left": 1025,
+    "top": 1,
+    "width": 510,
+    "height": 486
+  },
+  {
+    "id": "bird-dog",
+    "atlas": "core.webp",
+    "left": 1,
+    "top": 489,
+    "width": 510,
+    "height": 534
+  },
+  {
+    "id": "knee-raise",
+    "atlas": "core.webp",
+    "left": 513,
+    "top": 489,
+    "width": 510,
+    "height": 534
+  },
+  {
+    "id": "suitcase",
+    "atlas": "core.webp",
+    "left": 1025,
+    "top": 489,
+    "width": 510,
+    "height": 534
+  },
+  {
+    "id": "farmer",
+    "atlas": "arms-and-control.webp",
+    "left": 1,
+    "top": 1,
+    "width": 510,
+    "height": 510
+  },
+  {
+    "id": "wrist-curl",
+    "atlas": "arms-and-control.webp",
+    "left": 513,
+    "top": 1,
+    "width": 510,
+    "height": 510
+  },
+  {
+    "id": "pronation",
+    "atlas": "arms-and-control.webp",
+    "left": 1025,
+    "top": 1,
+    "width": 510,
+    "height": 510
+  },
+  {
+    "id": "external-rotation",
+    "atlas": "arms-and-control.webp",
+    "left": 1,
+    "top": 513,
+    "width": 510,
+    "height": 510
+  },
+  {
+    "id": "internal-rotation",
+    "atlas": "arms-and-control.webp",
+    "left": 513,
+    "top": 513,
+    "width": 510,
+    "height": 510
+  },
+  {
+    "id": "psoas",
+    "atlas": "arms-and-control.webp",
+    "left": 1025,
+    "top": 513,
+    "width": 510,
+    "height": 510
+  }
+]

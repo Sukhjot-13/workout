@@ -2,6 +2,8 @@
 
 ## 🔴 Vulnerabilities
 
+- (2026-10-15) **Dependency audit — runtime findings fixed:** previously installed Next 16.3.5 was in the affected range for GHSA-vcvr-r3jv-pc5j and other published Next advisories. Updated Next to 16.4.2 within the existing compatible version range, including affected sharp/source-map-js transitive dependencies. `npm audit --omit=dev` reports zero vulnerabilities. The braces/fast-glob/micromatch chain is development lint tooling; npm's proposed force fix downgrades eslint-config-next to 14, so do not apply it blindly. Five high-severity development-tool dependency audit entries remain in that lint chain; there is no compatible automatic fix reported.
+
 - (2026-09-28) **NoSQL operator injection on `/api/session` — FIXED.** `date` and `day`
   were taken straight from the query string and the JSON body and used as raw Mongo
   filters, so `{"date":{"$ne":null},"day":"day1","items":{}}` turned `deleteOne` into
@@ -34,6 +36,8 @@
   the endpoint is a full data dump for whoever can reach it.
 
 ## 🟢 Improvements
+
+- (2026-10-15) **Implemented — three-day program, resume navigation and individual form images.** Replaced the active routine with the supplied workouts and removed Day 4 from selection. Added first-unchecked scrolling, a manual resume shortcut, decimal entry, atomic previous-set copy, independent completion, and 66 individually cropped on-demand illustrations. Frozen historical identities prevent a changed exercise order from reassigning old sets; removed exercises/days stay available in exports. Serialized saves, guarded late loads and merged local/cloud history address further data-loss paths. Regression tests cover these changes.
 
 - (2026-09-28) Silent data loss on date/day switch — FIXED. The single shared 500 ms debounce
   ref was cleared by the next `saveSession` regardless of which session it owned, so editing

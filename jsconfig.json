@@ -5,10 +5,11 @@
       "@/*": ["./*"]
     },
     "allowJs": true,
+    "jsx": "preserve",
     "checkJs": false,
     "noEmit": true,
     "skipLibCheck": true
   },
-  "include": ["app/**/*.js", "lib/**/*.js", "tests/**/*.js", "*.mjs"],
+  "include": ["app/**/*.js", "components/**/*.jsx", "lib/**/*.js", "tests/**/*.js", "tests/**/*.jsx", "*.mjs"],
   "exclude": ["node_modules", ".next"]
 }

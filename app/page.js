@@ -4,27 +4,27 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { PROGRAM, PROGRAM_VERSION, hasSessionData, migrateItems } from "@/lib/program";
 import {
   WEIGHT_UNITS,
-  formatRepsValue,
   formatSessionAsText,
-  formatWeightValue,
-  getDefaultReps,
   normalizeWeightUnit,
-  repsUnitLabel,
 } from "@/lib/session-format";
 import {
   MAX_CACHED_SESSIONS,
   buildSessionEntry,
   pickNewerSession,
+  mergeSessionHistory,
   readCache,
   readSessionEntry,
   sessionKeyFor,
   writeCache,
 } from "@/lib/session-cache";
-import { coerceNumberInput } from "@/lib/validate";
+import SetTracker from "@/components/SetTracker";
+import ExerciseGuide from "@/components/ExerciseGuide";
+import { createSaveQueue } from "@/lib/session-sync";
+import { findFirstUnchecked, getDayProgress, getItemProgress } from "@/lib/workout-progress";
 
 const SAVE_DEBOUNCE_MS = 500;
 const WEIGHT_UNIT_STORAGE_KEY = "workout_tracker_weight_unit";
-const MAX_CUSTOM_SET_COUNT = 20;
+const DAY_STORAGE_KEY = "workout_tracker_selected_day";
 
 // ─── Export Utilities ────────────────────────────────────────────────────────
 
@@ -213,77 +213,36 @@ function findPreviousSession(allPastSessions, selectedDay, selectedDate) {
 // means a save can be flushed from a debounce timer, a `pagehide` handler or
 // the load effect without reading a ref from render scope, and it guarantees
 // switching day/date flushes the outgoing session instead of dropping it.
-const saveQueue = {
-  pending: new Map(),
-  timers: new Map(),
-  activeKey: null,
-};
+const saveQueue = { activeKey: null, localFailures: new Set(), editVersions: new Map() };
+const syncCallbacks = { setSyncStatus: null, setMongoStatus: null };
 
-const syncCallbacks = {
-  setSyncStatus: null,
-  setMongoStatus: null,
-};
-
-function setSyncStatusSafe(value) {
-  if (syncCallbacks.setSyncStatus) syncCallbacks.setSyncStatus(value);
-}
-
-function setMongoConnectedSafe() {
-  if (syncCallbacks.setMongoStatus) {
-    syncCallbacks.setMongoStatus((prev) => ({ ...prev, connected: true, configured: true }));
+async function postSession(payload, keepalive) {
+  const response = await fetch("/api/session", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload), keepalive,
+  });
+  if (!response.ok) throw new Error(`Session save returned ${response.status}`);
+  const result = await response.json();
+  if (result.mongoConnected) {
+    syncCallbacks.setMongoStatus?.({ connected: true, configured: true });
+    return "synced";
   }
+  return "local";
 }
 
-function postSession(payload, keepalive) {
-  const key = sessionKeyFor(payload.date, payload.day);
-  return fetch("/api/session", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-    keepalive,
-  })
-    .then(async (res) => {
-      if (!res.ok) {
-        if (saveQueue.activeKey === key) setSyncStatusSafe("error");
-        return;
-      }
-      const result = await res.json();
-      if (result.mongoConnected) {
-        setMongoConnectedSafe();
-        if (saveQueue.activeKey === key) setSyncStatusSafe("synced");
-      } else if (saveQueue.activeKey === key) {
-        setSyncStatusSafe("local");
-      }
-    })
-    .catch(() => {
-      if (saveQueue.activeKey === key) setSyncStatusSafe("error");
-    });
-}
-
-function flushPendingSave(key, keepalive = false) {
-  const timer = saveQueue.timers.get(key);
-  if (timer !== undefined) {
-    clearTimeout(timer);
-    saveQueue.timers.delete(key);
-  }
-  const pending = saveQueue.pending.get(key);
-  if (!pending) return;
-  saveQueue.pending.delete(key);
-  postSession(pending, keepalive);
-}
-
+const sessionSync = createSaveQueue({
+  send: postSession,
+  onStatus(key, status) {
+    if (key !== saveQueue.activeKey) return;
+    syncCallbacks.setSyncStatus?.(saveQueue.localFailures.has(key) ? (status === "synced" ? "cloud-only" : "error") : status);
+  },
+  delay: SAVE_DEBOUNCE_MS,
+});
+function flushPendingSave(key, keepalive = false) { return sessionSync.flush(key, keepalive); }
 function queueSessionSave(date, day, items) {
-  const key = sessionKeyFor(date, day);
-  saveQueue.pending.set(key, { date, day, items, programVersion: PROGRAM_VERSION });
-  const existing = saveQueue.timers.get(key);
-  if (existing !== undefined) clearTimeout(existing);
-  saveQueue.timers.set(key, setTimeout(() => flushPendingSave(key), SAVE_DEBOUNCE_MS));
+  sessionSync.queue(sessionKeyFor(date, day), { date, day, items, programVersion: PROGRAM_VERSION });
 }
-
-function flushAllPendingSaves() {
-  Array.from(saveQueue.pending.keys()).forEach((key) => flushPendingSave(key, true));
-}
-
+function flushAllPendingSaves() { sessionSync.flushAll(true); }
 
 export default function WorkoutPage() {
   const [selectedDay, setSelectedDay] = useState("day1");
@@ -291,13 +250,18 @@ export default function WorkoutPage() {
   // mount: a UTC server date would otherwise hydrate east-of-UTC users into
   // yesterday's session.
   const [selectedDate, setSelectedDate] = useState("");
+  const [readySession, setReadySession] = useState(null);
+  const autoScrollDone = useRef(null);
+  const resumeActivity = useRef(0);
   const [items, setItems] = useState({});
   // "synced" | "saving" | "local" | "error"
-  const [syncStatus, setSyncStatus] = useState("synced");
+  const [syncStatus, setSyncStatus] = useState("local");
   const [mongoStatus, setMongoStatus] = useState({ configured: false, connected: false });
   const [showHistory, setShowHistory] = useState(false);
   const [historyList, setHistoryList] = useState([]);
   const [showExport, setShowExport] = useState(false);
+  const [guideItem, setGuideItem] = useState(null);
+  const [historyLoading, setHistoryLoading] = useState(false);
   const [allPastSessions, setAllPastSessions] = useState([]);
   const [previousSession, setPreviousSession] = useState(null);
   const [collapsedSections, setCollapsedSections] = useState({});
@@ -349,10 +313,18 @@ export default function WorkoutPage() {
     try {
       const stored = globalThis.localStorage?.getItem(WEIGHT_UNIT_STORAGE_KEY);
       if (stored) setWeightUnit(normalizeWeightUnit(stored));
+      const storedDay = globalThis.localStorage?.getItem(DAY_STORAGE_KEY);
+      if (Object.hasOwn(PROGRAM, storedDay)) setSelectedDay(storedDay);
     } catch (err) {
       console.warn("Error reading weight unit preference:", err);
     }
   }, []);
+
+  useEffect(() => {
+    if (!selectedDate) return;
+    try { globalThis.localStorage?.setItem(DAY_STORAGE_KEY, selectedDay); }
+    catch { /* Session saving separately reports unavailable storage. */ }
+  }, [selectedDay, selectedDate]);
 
   // Never lose an unsaved session to a tab close or bfcache eviction.
   useEffect(() => {
@@ -366,9 +338,21 @@ export default function WorkoutPage() {
 
   // Load session when date or day changes
   useEffect(() => {
+    function cancelAutomaticResume() {
+      autoScrollDone.current = saveQueue.activeKey;
+      resumeActivity.current++;
+    }
+    const events = ["pointerdown", "keydown", "wheel", "touchstart"];
+    events.forEach((event) => window.addEventListener(event, cancelAutomaticResume, { passive: true }));
+    return () => events.forEach((event) => window.removeEventListener(event, cancelAutomaticResume));
+  }, []);
+
+  useEffect(() => {
     if (!selectedDate) return undefined;
 
     const sessionKey = sessionKeyFor(selectedDate, selectedDay);
+    setReadySession(null);
+    autoScrollDone.current = null;
     const previousKey = saveQueue.activeKey;
     saveQueue.activeKey = sessionKey;
     if (previousKey && previousKey !== sessionKey) {
@@ -376,6 +360,7 @@ export default function WorkoutPage() {
       flushPendingSave(previousKey);
     }
 
+    const versionAtLoad = saveQueue.editVersions.get(sessionKey) || 0;
     // 1. Instant load from local storage
     const cached = readCache();
     const local = readSessionEntry(cached[sessionKey], selectedDay);
@@ -388,21 +373,25 @@ export default function WorkoutPage() {
       setMigrationWarning(describeMigration(local));
     }
     setItems(local.items);
-    setSyncStatus("synced");
+    setMigrationWarning(local.rekeyed || local.unmapped.length ? describeMigration(local) : null);
+    setCollapsedSections({});
+    setSyncStatus("local");
 
     // 2. Fetch from API (MongoDB)
     let isMounted = true;
     async function fetchServerSession() {
       try {
         const res = await fetch(
-          `/api/session?date=${encodeURIComponent(selectedDate)}&day=${encodeURIComponent(selectedDay)}`
+          `/api/session?date=${encodeURIComponent(selectedDate)}&day=${encodeURIComponent(selectedDay)}`,
+          { signal: AbortSignal.timeout(6000), cache: "no-store" }
         );
         if (!res.ok || !isMounted) return;
         const data = await res.json();
         if (data.mongoConnected) {
           setMongoStatus((prev) => ({ ...prev, connected: true, configured: true }));
         }
-        if (!isMounted) return;
+        if (!isMounted || (saveQueue.editVersions.get(sessionKey) || 0) !== versionAtLoad) return;
+        setSyncStatus(data.mongoConnected ? "synced" : "local");
 
         const serverEntry =
           data.items && typeof data.items === "object" && !Array.isArray(data.items)
@@ -427,15 +416,18 @@ export default function WorkoutPage() {
 
         if (!data.mongoConnected) return;
 
-        if (hasSessionData(localEntry.items)) {
+        if (hasSessionData(localEntry.items) || localEntry.updatedAt) {
           // The local copy is newer (or the server has nothing at all) — push
           // it up instead of letting the server overwrite it.
           queueSessionSave(selectedDate, selectedDay, localEntry.items);
-        } else if (!hasSessionData(serverEntry?.items)) {
-          writeCache(sessionKey, null);
         }
       } catch (err) {
         console.warn("API session fetch failed, using local cache:", err);
+      } finally {
+        if (isMounted) {
+          if ((saveQueue.editVersions.get(sessionKey) || 0) !== versionAtLoad) autoScrollDone.current = sessionKey;
+          setReadySession(sessionKey);
+        }
       }
     }
 
@@ -448,20 +440,23 @@ export default function WorkoutPage() {
   // Debounced auto-save function
   const saveSession = useCallback(
     (newItems) => {
+      if (!selectedDate) return;
       const sessionKey = sessionKeyFor(selectedDate, selectedDay);
       const hasData = hasSessionData(newItems);
 
-      // Save locally immediately or delete from cache if neutral
-      const write = writeCache(
-        sessionKey,
-        hasData ? buildSessionEntry(newItems, new Date(), PROGRAM_VERSION) : null
-      );
+      const updatedAt = new Date().toISOString();
+      saveQueue.editVersions.set(sessionKey, (saveQueue.editVersions.get(sessionKey) || 0) + 1);
+      const entry = buildSessionEntry(newItems, updatedAt, PROGRAM_VERSION);
+      const write = writeCache(sessionKey, entry);
+      if (write.ok) saveQueue.localFailures.delete(sessionKey);
+      else saveQueue.localFailures.add(sessionKey);
+      queueSessionSave(selectedDate, selectedDay, newItems);
 
       if (!write.ok) {
         setSyncStatus("error");
         if (write.quotaExceeded) {
           showToast(
-            `This device is out of storage. Older sessions were trimmed to make room — export your history to back it up.`
+            "This device is out of storage. Export your session to keep a backup."
           );
         } else {
           showToast(
@@ -476,21 +471,15 @@ export default function WorkoutPage() {
           );
         }
         setSyncStatus("saving");
-        queueSessionSave(selectedDate, selectedDay, newItems);
       }
 
-      // Update in-memory history list immediately if history panel is open
-      setHistoryList((prev) => {
-        if (!hasData) {
-          return prev.filter((h) => !(h.date === selectedDate && h.day === selectedDay));
-        } else {
-          const exists = prev.some((h) => h.date === selectedDate && h.day === selectedDay);
-          if (!exists) {
-            return [{ date: selectedDate, day: selectedDay }, ...prev];
-          }
-          return prev;
-        }
-      });
+      const patchHistory = (previous) => {
+        const remaining = previous.filter((session) => !(session.date === selectedDate && session.day === selectedDay));
+        return hasData ? [{ date: selectedDate, day: selectedDay, ...entry }, ...remaining]
+          .sort((a, b) => b.date.localeCompare(a.date) || a.day.localeCompare(b.day)) : remaining;
+      };
+      setHistoryList(patchHistory);
+      setAllPastSessions(patchHistory);
     },
     [selectedDate, selectedDay, showToast]
   );
@@ -516,25 +505,13 @@ export default function WorkoutPage() {
     const section = currentProgramDay.sections[sIdx];
     if (!section) return;
 
-    const isAllDone = section.items.every((it) => {
-      const itemData = currentItems[it.key] || {};
-      if (it.kind === "simple" || it.kind === "result") {
-        return !!itemData.done;
-      }
-      if (it.kind === "sets") {
-        const count = itemData.customSetCount !== undefined ? itemData.customSetCount : it.setCount;
-        const sObj = itemData.sets || {};
-        for (let s = 1; s <= count; s++) {
-          if (!sObj[String(s)]?.done) return false;
-        }
-        return true;
-      }
-      return true;
-    });
-
+    const isAllDone = section.items.every((item) => getItemProgress(item, currentItems[item.key]).isComplete);
+    const collapsingKey = saveQueue.activeKey;
+    const collapsingVersion = saveQueue.editVersions.get(collapsingKey);
     if (isAllDone) {
       triggerHaptic("success");
       setTimeout(() => {
+        if (saveQueue.activeKey !== collapsingKey || saveQueue.editVersions.get(collapsingKey) !== collapsingVersion) return;
         setCollapsedSections((prev) => {
           if (prev[sIdx]) return prev;
           return { ...prev, [sIdx]: true };
@@ -553,36 +530,24 @@ export default function WorkoutPage() {
   };
 
   // Load history list and past sessions for ghost values
-  const loadHistory = useCallback(async () => {
-    let sessions = [];
-    let fetchedFromMongo = false;
+  const loadHistory = useCallback(async (silent = true) => {
+    setHistoryLoading(true);
+    let serverSessions = [];
     try {
-      const res = await fetch("/api/history");
-      if (res.ok) {
-        const data = await res.json();
-        if (data.mongoConnected && Array.isArray(data.sessions)) {
-          sessions = data.sessions.filter((s) => hasSessionData(s.items));
-          setAllPastSessions(sessions);
-          fetchedFromMongo = true;
-        }
-      }
-    } catch (e) {}
-
-    // If MongoDB is not connected or local fallback, read valid sessions from localStorage
-    if (!fetchedFromMongo) {
-      const cached = readCache();
-      sessions = Object.entries(cached)
-        .map(([key, entry]) => {
-          const [date, day] = key.split("|");
-          return { date, day, ...readSessionEntry(entry, day) };
-        })
-        .filter((s) => hasSessionData(s.items))
-        .sort((a, b) => b.date.localeCompare(a.date));
+      const res = await fetch("/api/history", { signal: AbortSignal.timeout(6000), cache: "no-store" });
+      if (!res.ok) throw new Error(`History returned ${res.status}`);
+      const data = await res.json();
+      if (Array.isArray(data.sessions)) serverSessions = data.sessions;
+    } catch (error) {
+      console.warn("Cloud history unavailable:", error);
+      if (!silent) showToast("Cloud history unavailable. Showing sessions saved on this device.");
+    } finally {
+      const sessions = mergeSessionHistory(serverSessions, readCache());
+      setHistoryList(sessions);
       setAllPastSessions(sessions);
+      setHistoryLoading(false);
     }
-
-    setHistoryList(sessions);
-  }, []);
+  }, [showToast]);
 
   // History is loaded once on mount, not on every date/day change: each load
   // used to mean a full history query from Mongo.
@@ -599,56 +564,53 @@ export default function WorkoutPage() {
 
   const toggleHistory = () => {
     if (!showHistory) {
-      loadHistory();
+      loadHistory(false);
     }
     setShowHistory((prev) => !prev);
   };
 
   const currentProgramDay = PROGRAM[selectedDay] || PROGRAM.day1;
 
-  // Session progress calculation (dynamically accounts for added/removed sets)
-  const totalSetsInDay = currentProgramDay.sections.reduce((acc, sec) => {
-    return (
-      acc +
-      sec.items.reduce((sAcc, item) => {
-        const saved = items[item.key] || {};
-        if (item.kind === "sets") {
-          const sCount = saved.customSetCount !== undefined ? saved.customSetCount : item.setCount;
-          return sAcc + sCount;
-        }
-        if (item.kind === "simple" || item.kind === "result") return sAcc + 1;
-        return sAcc;
-      }, 0)
-    );
-  }, 0);
+  const jumpToFirstUnchecked = useCallback((focus = false) => {
+    const target = findFirstUnchecked(PROGRAM[selectedDay], items);
+    if (!target) {
+      if (focus) showToast("Everything is complete for this workout.", "info");
+      return;
+    }
+    const sessionKey = sessionKeyFor(selectedDate, selectedDay);
+    setCollapsedSections((previous) => ({ ...previous, [target.sectionIndex]: false }));
+    const activityAtStart = resumeActivity.current;
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      if (saveQueue.activeKey !== sessionKey) return;
+      if (!focus && resumeActivity.current !== activityAtStart) return;
+      const element = document.getElementById(`exercise-${target.key}`);
+      const controls = document.querySelector(".controls-bar");
+      if (!element) return;
+      const offset = (controls?.getBoundingClientRect().height || 90) + 28;
+      const top = element.getBoundingClientRect().top + window.scrollY - offset;
+      window.scrollTo({ top: Math.max(0, top), behavior: focus && !window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "smooth" : "instant" });
+      if (focus) element.focus({ preventScroll: true });
+    }));
+  }, [items, selectedDate, selectedDay, showToast]);
 
-  // Only indices 1..count count, otherwise a stale payload with leftover set
-  // keys can push the bar past its own track.
-  const completedSetsInDay = currentProgramDay.sections.reduce((acc, sec) => {
-    return (
-      acc +
-      sec.items.reduce((sAcc, item) => {
-        const saved = items[item.key] || {};
-        if (item.kind === "sets") {
-          const count = saved.customSetCount !== undefined ? saved.customSetCount : item.setCount;
-          const sObj = saved.sets || {};
-          let doneCount = 0;
-          for (let s = 1; s <= count; s++) {
-            if (sObj[String(s)]?.done) doneCount++;
-          }
-          return sAcc + doneCount;
-        }
-        if ((item.kind === "simple" || item.kind === "result") && saved.done) {
-          return sAcc + 1;
-        }
-        return sAcc;
-      }, 0)
-    );
-  }, 0);
+  useEffect(() => {
+    const key = sessionKeyFor(selectedDate, selectedDay);
+    if (!selectedDate || readySession !== key || autoScrollDone.current === key) return;
+    // Let a day/date interaction finish before moving its controls out of view.
+    // Any further interaction cancels this pending resume via the listener above.
+    const activityAtStart = resumeActivity.current;
+    const timer = setTimeout(() => {
+      if (resumeActivity.current !== activityAtStart) return;
+      autoScrollDone.current = key;
+      jumpToFirstUnchecked();
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [readySession, selectedDate, selectedDay, jumpToFirstUnchecked]);
 
-  const progressPercent = totalSetsInDay > 0
-    ? Math.min(100, Math.max(0, Math.round((completedSetsInDay / totalSetsInDay) * 100)))
-    : 0;
+  const dayProgress = getDayProgress(currentProgramDay, items);
+  const totalSetsInDay = dayProgress.total;
+  const completedSetsInDay = dayProgress.completed;
+  const progressPercent = dayProgress.percent;
 
   const syncIndicatorClass =
     syncStatus === "saving"
@@ -662,10 +624,12 @@ export default function WorkoutPage() {
     syncStatus === "saving"
       ? "Saving..."
       : syncStatus === "error"
-      ? "Couldn't save — data is only on this device"
+      ? "Sync failed · export a backup or retry"
       : syncStatus === "local"
       ? "Saved on this device only"
-      : "✓ Saved";
+      : syncStatus === "cloud-only"
+      ? "Saved to cloud · device storage unavailable"
+      : "✓ Saved to cloud";
 
   return (
     <main className="app-container">
@@ -675,7 +639,7 @@ export default function WorkoutPage() {
           <div>
             <h1 className="app-title">Lean Athletic Workout Tracker</h1>
             <p className="app-subtitle">
-              3 mandatory gym days + an optional 4th athletic/conditioning day.
+              Three days. A stronger, more balanced you.
             </p>
           </div>
 
@@ -693,15 +657,15 @@ export default function WorkoutPage() {
                   ? "Connected to MongoDB"
                   : mongoStatus.configured
                   ? "Connecting to MongoDB..."
-                  : "Using local storage. Add MONGODB_URI to .env to enable cloud sync."
+                  : "Workouts are saved in this browser. Export a backup anytime."
               }
             >
               <span className="status-dot"></span>
               {mongoStatus.connected
                 ? "MongoDB Connected"
                 : mongoStatus.configured
-                ? "Connecting..."
-                : "Local Storage (Paste Mongo URL in .env)"}
+                ? "Cloud unavailable"
+                : "Saved on this device"}
             </span>
 
             <button
@@ -728,6 +692,8 @@ export default function WorkoutPage() {
           </div>
         </div>
       </header>
+
+      {guideItem && <ExerciseGuide key={guideItem.key} item={guideItem} onClose={() => setGuideItem(null)} />}
 
       {/* Export Modal */}
       {showExport && (
@@ -773,7 +739,7 @@ export default function WorkoutPage() {
             <h3>Logged Workout History</h3>
             <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
               <span style={{ fontSize: "0.82rem", color: "var(--text-muted)" }}>
-                {historyList.length} past sessions recorded
+                {historyLoading ? "Loading sessions…" : `${historyList.length} sessions recorded`}
               </span>
               {historyList.length > 0 && (
                 <button
@@ -792,7 +758,7 @@ export default function WorkoutPage() {
               )}
             </div>
           </div>
-          {historyList.length === 0 ? (
+          {historyLoading ? <p role="status" className="muted">Loading workout history…</p> : historyList.length === 0 ? (
             <p style={{ margin: 0, color: "var(--text-muted)", fontSize: "0.88rem" }}>
               No previous workouts saved yet. As you log sets, they will appear here.
             </p>
@@ -803,6 +769,11 @@ export default function WorkoutPage() {
                   key={sessionKeyFor(h.date, h.day)}
                   className="history-item-btn"
                   onClick={() => {
+                    if (!PROGRAM[h.day]) {
+                      downloadFile(formatSessionAsText(h, PROGRAM, { weightUnit }), `workout-${h.date}-${h.day}.txt`, "text/plain");
+                      showToast("Archived session downloaded.", "info");
+                      return;
+                    }
                     setSelectedDate(h.date);
                     setSelectedDay(h.day);
                     setShowHistory(false);
@@ -810,7 +781,7 @@ export default function WorkoutPage() {
                 >
                   <span className="history-item-date">{h.date}</span>
                   <span className="history-item-day">
-                    {PROGRAM[h.day]?.title || h.day}
+                    {PROGRAM[h.day]?.title || "Archived session · download ↗"}
                   </span>
                 </button>
               ))}
@@ -825,7 +796,6 @@ export default function WorkoutPage() {
           { id: "day1", label: "Day 1", name: "Full Body A" },
           { id: "day2", label: "Day 2", name: "Full Body B" },
           { id: "day3", label: "Day 3", name: "Full Body C" },
-          { id: "day4", label: "Day 4", name: "Athletic / Cond" },
         ].map((d) => (
           <button
             key={d.id}
@@ -838,7 +808,6 @@ export default function WorkoutPage() {
             className={`day-tab-btn ${selectedDay === d.id ? "active" : ""}`}
             onClick={() => {
               setSelectedDay(d.id);
-              window.scrollTo({ top: 0, behavior: "smooth" });
             }}
           >
             <span className="day-tab-label">{d.label}</span>
@@ -859,15 +828,11 @@ export default function WorkoutPage() {
             value={selectedDay}
             onChange={(e) => {
               setSelectedDay(e.target.value);
-              window.scrollTo({ top: 0, behavior: "smooth" });
             }}
           >
             <option value="day1">Day 1 — Full Body A</option>
             <option value="day2">Day 2 — Full Body B</option>
             <option value="day3">Day 3 — Full Body C</option>
-            <option value="day4">
-              Optional Day 4 — Athleticism + Conditioning
-            </option>
           </select>
         </div>
 
@@ -916,7 +881,11 @@ export default function WorkoutPage() {
           aria-live="polite"
         >
           {syncIndicatorText}
+          {syncStatus === "error" && <button type="button" className="retry-save-button" onClick={() => saveSession(items)}>Retry save</button>}
         </div>
+        <button type="button" className="jump-next-button" aria-label="Jump to first unfinished exercise" onClick={() => jumpToFirstUnchecked(true)}>
+          {progressPercent === 100 ? "Done ✓" : "Next ↓"}
+        </button>
       </section>
 
       {migrationWarning && (
@@ -975,30 +944,17 @@ export default function WorkoutPage() {
         </div>
       </div>
 
+      {!selectedDate && <p role="status">Loading your workout…</p>}
+      <fieldset className="workout-fields" disabled={!selectedDate}>
+      <div className="workout-resume-bar">
+        <span>Pick up where you left off. Guides stay hidden until opened.</span>
+      </div>
       {/* Workout Sections */}
       {currentProgramDay.sections.map((section, sIdx) => {
         const isCollapsed = !!collapsedSections[sIdx];
 
-        // Calculate completion status for section header badge
-        let sectionDoneCount = 0;
-        section.items.forEach((it) => {
-          const itData = items[it.key] || {};
-          if (it.kind === "simple" || it.kind === "result") {
-            if (itData.done) sectionDoneCount++;
-          } else if (it.kind === "sets") {
-            const count = itData.customSetCount !== undefined ? itData.customSetCount : it.setCount;
-            const sObj = itData.sets || {};
-            let allDone = true;
-            for (let s = 1; s <= count; s++) {
-              if (!sObj[String(s)]?.done) {
-                allDone = false;
-                break;
-              }
-            }
-            if (allDone && count > 0) sectionDoneCount++;
-          }
-        });
-        const isSectionComplete = section.items.length > 0 && sectionDoneCount === section.items.length;
+        const sectionDoneCount = section.items.filter((item) => getItemProgress(item, items[item.key]).isComplete).length;
+        const isSectionComplete = sectionDoneCount === section.items.length;
 
         return (
           <section key={sIdx} className="workout-section">
@@ -1033,9 +989,13 @@ export default function WorkoutPage() {
                   const prevItem = previousSession?.items?.[key] ?? previousSession?.items?.[item.legacyKey];
 
                   return (
-                    <div key={key} className="exercise-box">
+                    <div key={key} id={`exercise-${key}`} tabIndex={-1} className="exercise-box">
                       <div className="exercise-info">
-                        <div className="exercise-name">{item.name}</div>
+                        <div className="exercise-heading">
+                          <div className="exercise-name">{item.name}</div>
+                          <button type="button" className="form-guide-button" onClick={() => setGuideItem(item)}
+                            aria-haspopup="dialog" aria-label={`Open form guide for ${item.name}`}>↗ Form guide</button>
+                        </div>
                         {item.prescription && (
                           <div className="exercise-prescription">
                             {item.prescription}
@@ -1079,311 +1039,8 @@ export default function WorkoutPage() {
                         </div>
                       )}
 
-                      {/* Sets table */}
-                      {item.kind === "sets" && (() => {
-                        const repsUnit = item.unit || "reps";
-                        const repsUnitLabelText = repsUnitLabel(repsUnit);
-                        const defaultReps = getDefaultReps(item.target, repsUnit);
-                        const currentSetCount = Math.min(
-                          MAX_CUSTOM_SET_COUNT,
-                          saved.customSetCount !== undefined ? saved.customSetCount : item.setCount
-                        );
-
-                        const cleanWeight = (val) => coerceNumberInput(val, { max: 1000 });
-                        const cleanReps = (val) => coerceNumberInput(val, { max: 10000 });
-
-                        const handleWeightChange = (setNum, val) => {
-                          const parsed = cleanWeight(val);
-                          if (parsed.invalid) return;
-                          updateItem(key, (it) => {
-                            const nextSets = { ...(it.sets || {}) };
-                            const setKey = String(setNum);
-                            const oldWeight = nextSets[setKey]?.weight ?? "";
-
-                            nextSets[setKey] = {
-                              ...(nextSets[setKey] || {}),
-                              weight: parsed.present ? parsed.value : "",
-                            };
-
-                            // When weight is entered, populate default reps if reps is empty
-                            if (parsed.present && (!nextSets[setKey].reps || String(nextSets[setKey].reps).trim() === "")) {
-                              nextSets[setKey].reps = defaultReps;
-                            }
-
-                            // If editing Set 1 and exercise has multiple sets:
-                            // Copy weight to subsequent sets if they are empty or matched old Set 1 weight
-                            if (setNum === 1 && currentSetCount > 1) {
-                              for (let s = 2; s <= currentSetCount; s++) {
-                                const sKey = String(s);
-                                const curSet = nextSets[sKey] || {};
-                                const curWeight = curSet.weight ?? "";
-                                if (curWeight === "" || curWeight === oldWeight) {
-                                  nextSets[sKey] = {
-                                    ...curSet,
-                                    weight: parsed.present ? parsed.value : "",
-                                  };
-                                  if (parsed.present && (!nextSets[sKey].reps || String(nextSets[sKey].reps).trim() === "")) {
-                                    nextSets[sKey].reps = defaultReps;
-                                  }
-                                }
-                              }
-                            }
-
-                            return { ...it, sets: nextSets };
-                          }, sIdx);
-                        };
-
-                        const handleRepsChange = (setNum, val) => {
-                          const parsed = cleanReps(val);
-                          if (parsed.invalid) return;
-                          updateItem(key, (it) => {
-                            const nextSets = { ...(it.sets || {}) };
-                            const setKey = String(setNum);
-                            nextSets[setKey] = {
-                              ...(nextSets[setKey] || {}),
-                              reps: parsed.present ? parsed.value : "",
-                            };
-                            return { ...it, sets: nextSets };
-                          }, sIdx);
-                        };
-
-                        const handleStepReps = (setNum, delta) => {
-                          triggerHaptic("light");
-                          updateItem(key, (it) => {
-                            const nextSets = { ...(it.sets || {}) };
-                            const setKey = String(setNum);
-                            const curReps = nextSets[setKey]?.reps;
-                            let baseVal;
-                            if (curReps !== undefined && curReps !== null && String(curReps).trim() !== "") {
-                              const parsed = parseInt(String(curReps).trim(), 10);
-                              baseVal = isNaN(parsed) ? parseInt(defaultReps, 10) : parsed;
-                            } else {
-                              baseVal = parseInt(defaultReps, 10);
-                            }
-                            const nextVal = Math.max(0, baseVal + delta);
-                            nextSets[setKey] = {
-                              ...(nextSets[setKey] || {}),
-                              reps: String(nextVal),
-                            };
-                            return { ...it, sets: nextSets };
-                          }, sIdx);
-                        };
-
-                        const handleDoneToggle = (setNum, checked) => {
-                          triggerHaptic(checked ? "medium" : "light");
-                          updateItem(key, (it) => {
-                            const nextSets = { ...(it.sets || {}) };
-                            const setKey = String(setNum);
-
-                            nextSets[setKey] = {
-                              ...(nextSets[setKey] || {}),
-                              done: checked,
-                            };
-
-                            // If marked done, auto-check all preceding sets (1 .. setNum - 1) if not already done
-                            if (checked && setNum > 1) {
-                              for (let s = 1; s < setNum; s++) {
-                                const prevKey = String(s);
-                                const prevSet = nextSets[prevKey] || {};
-                                if (!prevSet.done) {
-                                  nextSets[prevKey] = {
-                                    ...prevSet,
-                                    done: true,
-                                  };
-                                }
-                              }
-                            }
-
-                            return { ...it, sets: nextSets };
-                          }, sIdx);
-                        };
-
-                        return (
-                          <div className="sets-container">
-                            <div className="sets-header-row">
-                              <div style={{ textAlign: "center" }}>Set</div>
-                              <div>Weight</div>
-                              <div className="reps-header-cell">
-                                <span>{repsUnit === "reps" ? "Reps" : repsUnitLabelText}</span>
-                                {item.target && (
-                                  <span className="target-pill" title={`Target: ${item.target}`}>
-                                    ({item.target})
-                                  </span>
-                                )}
-                              </div>
-                              <div style={{ textAlign: "center" }}>Done</div>
-                            </div>
-
-                            {Array.from({ length: currentSetCount }, (_, n) => n + 1).map(
-                              (setNum) => {
-                                const setKey = String(setNum);
-                                const setData = (saved.sets || {})[setKey] || {};
-                                const prevSet = prevItem?.sets?.[setKey];
-                                const disableWeight = item.track === "reps";
-                                const isDone = !!setData.done;
-
-                                return (
-                                  <div
-                                    key={setNum}
-                                    className={`set-entry-row ${isDone ? "is-done" : ""}`}
-                                  >
-                                    <div className={`set-number ${isDone ? "is-done" : ""}`}>
-                                      {isDone ? "✓" : setNum}
-                                    </div>
-
-                                    <div className="set-input-wrap weight-wrap">
-                                      <input
-                                        type="text"
-                                        inputMode="decimal"
-                                        className="set-input weight-input"
-                                        aria-label={`${item.name} weight, set ${setNum}${disableWeight ? " (not tracked for this exercise)" : `, in ${weightUnit}`}`}
-                                        placeholder={prevSet?.weight ? `Last: ${formatWeightValue(prevSet.weight, weightUnit)}` : (disableWeight ? "—" : weightUnit)}
-                                        disabled={disableWeight}
-                                        value={setData.weight ?? ""}
-                                        onChange={(e) => handleWeightChange(setNum, e.target.value)}
-                                      />
-                                    </div>
-
-                                    <div className="reps-stepper-wrap">
-                                      <div className="reps-stepper">
-                                        <button
-                                          type="button"
-                                          className="stepper-btn minus"
-                                          aria-label={`Decrease ${repsUnitLabelText} for ${item.name}, set ${setNum}`}
-                                          onClick={() => handleStepReps(setNum, -1)}
-                                          title={`-1 ${repsUnitLabelText}`}
-                                        >
-                                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                                            <line x1="5" y1="12" x2="19" y2="12" />
-                                          </svg>
-                                        </button>
-                                        <input
-                                          type="text"
-                                          inputMode="numeric"
-                                          pattern="[0-9]*"
-                                          className="set-input reps-input"
-                                          aria-label={`${item.name} ${repsUnitLabelText}, set ${setNum}`}
-                                          placeholder={prevSet?.reps ? `Last: ${prevSet.reps}` : (item.target || repsUnitLabelText)}
-                                          value={setData.reps ?? ""}
-                                          onChange={(e) => handleRepsChange(setNum, e.target.value)}
-                                        />
-                                        <button
-                                          type="button"
-                                          className="stepper-btn plus"
-                                          aria-label={`Increase ${repsUnitLabelText} for ${item.name}, set ${setNum}`}
-                                          onClick={() => handleStepReps(setNum, 1)}
-                                          title={`+1 ${repsUnitLabelText}`}
-                                        >
-                                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                                            <line x1="12" y1="5" x2="12" y2="19" />
-                                            <line x1="5" y1="12" x2="19" y2="12" />
-                                          </svg>
-                                        </button>
-                                      </div>
-
-                                      {/* Previous session ghost chip */}
-                                      {prevSet && (prevSet.weight || prevSet.reps) && (
-                                        <button
-                                          type="button"
-                                          className="prev-ghost-chip"
-                                          title="Tap to apply previous workout values"
-                                          onClick={() => {
-                                            triggerHaptic("light");
-                                            if (prevSet.weight) handleWeightChange(setNum, prevSet.weight);
-                                            if (prevSet.reps) handleRepsChange(setNum, prevSet.reps);
-                                          }}
-                                        >
-                                          <span className="ghost-arrow">⏮</span>
-                                          <span>
-                                            Last:{" "}
-                                            {[
-                                              prevSet.weight
-                                                ? formatWeightValue(prevSet.weight, weightUnit)
-                                                : "",
-                                              prevSet.reps
-                                                ? formatRepsValue(prevSet.reps, repsUnit)
-                                                : "",
-                                            ]
-                                              .filter(Boolean)
-                                              .join(" × ")}
-                                          </span>
-                                        </button>
-                                      )}
-                                    </div>
-
-                                    <button
-                                      type="button"
-                                      className={`set-done-btn ${isDone ? "is-done" : ""}`}
-                                      aria-label={`Mark set ${setNum} ${isDone ? "incomplete" : "complete"}`}
-                                      onClick={() => handleDoneToggle(setNum, !isDone)}
-                                    >
-                                      {isDone ? (
-                                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-                                          <polyline points="20 6 9 17 4 12" />
-                                        </svg>
-                                      ) : (
-                                        <span className="set-done-circle" />
-                                      )}
-                                    </button>
-                                  </div>
-                                );
-                              }
-                            )}
-
-                            {/* Dynamic Add / Remove Sets Controls */}
-                            <div className="sets-action-bar">
-                              <button
-                                type="button"
-                                className="set-action-btn add-set-btn"
-                                onClick={() => {
-                                  triggerHaptic("light");
-                                  updateItem(key, (it) => {
-                                    const count = it.customSetCount !== undefined ? it.customSetCount : item.setCount;
-                                    const nextCount = Math.min(MAX_CUSTOM_SET_COUNT, count + 1);
-                                    if (nextCount === count) return it;
-                                    const nextSets = { ...(it.sets || {}) };
-                                    const prevWeight = nextSets[String(count)]?.weight ?? nextSets["1"]?.weight ?? "";
-                                    nextSets[String(nextCount)] = {
-                                      weight: prevWeight,
-                                      reps: defaultReps,
-                                      done: false,
-                                    };
-                                    return { ...it, customSetCount: nextCount, sets: nextSets };
-                                  }, sIdx);
-                                }}
-                              >
-                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                                  <line x1="12" y1="5" x2="12" y2="19" />
-                                  <line x1="5" y1="12" x2="19" y2="12" />
-                                </svg>
-                                Add Set
-                              </button>
-
-                              {currentSetCount > 1 && (
-                                <button
-                                  type="button"
-                                  className="set-action-btn remove-set-btn"
-                                  onClick={() => {
-                                    triggerHaptic("light");
-                                    updateItem(key, (it) => {
-                                      const count = it.customSetCount !== undefined ? it.customSetCount : item.setCount;
-                                      const nextCount = Math.max(1, count - 1);
-                                      const nextSets = { ...(it.sets || {}) };
-                                      delete nextSets[String(count)];
-                                      return { ...it, customSetCount: nextCount, sets: nextSets };
-                                    }, sIdx);
-                                  }}
-                                >
-                                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                                    <line x1="5" y1="12" x2="19" y2="12" />
-                                  </svg>
-                                  Remove Set {currentSetCount}
-                                </button>
-                              )}
-                            </div>
-                          </div>
-                        );
-                      })()}
+                      {item.kind === "sets" && <SetTracker item={item} saved={saved} previous={prevItem}
+                        weightUnit={weightUnit} onUpdate={(updater) => updateItem(key, updater, sIdx)} />}
 
                       {/* Result / Cardio */}
                       {item.kind === "result" && (
@@ -1392,6 +1049,7 @@ export default function WorkoutPage() {
                             <span className="result-field-label">{item.label1}</span>
                             <input
                               type="text"
+                              maxLength={500}
                               className="set-input"
                               aria-label={`${item.name} — ${item.label1}`}
                               value={saved.value1 || ""}
@@ -1406,6 +1064,7 @@ export default function WorkoutPage() {
                             <span className="result-field-label">{item.label2}</span>
                             <input
                               type="text"
+                              maxLength={500}
                               className="set-input"
                               aria-label={`${item.name} — ${item.label2}`}
                               value={saved.value2 || ""}
@@ -1446,261 +1105,26 @@ export default function WorkoutPage() {
           </section>
         );
       })}
+      </fieldset>
       </div>
 
-      {/* Program Guidelines / Reference */}
-      <section className="reference-section" aria-label="Reference rules">
-        <details>
-          <summary>Weekly Layout & Schedule</summary>
-          <div className="reference-content">
-            <div className="ref-table-wrap">
-              <table className="ref-table">
-                <thead>
-                  <tr>
-                    <th>Day</th>
-                    <th>Training Session</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr>
-                    <td><strong>Monday</strong></td>
-                    <td><strong>Day 1 — Full Body A: Squat + Upper Body Foundation</strong></td>
-                  </tr>
-                  <tr>
-                    <td>Tuesday</td>
-                    <td>Walking / light cardio / mobility</td>
-                  </tr>
-                  <tr>
-                    <td><strong>Wednesday</strong></td>
-                    <td><strong>Day 2 — Full Body B: Posterior Chain + Unilateral</strong></td>
-                  </tr>
-                  <tr>
-                    <td>Thursday</td>
-                    <td>Walking / light cardio / mobility</td>
-                  </tr>
-                  <tr>
-                    <td><strong>Friday</strong></td>
-                    <td><strong>Day 3 — Full Body C: Complete Physique + Athletic Strength</strong></td>
-                  </tr>
-                  <tr>
-                    <td><strong>Saturday</strong></td>
-                    <td><strong>Optional Day 4 — Athletic conditioning + mobility</strong></td>
-                  </tr>
-                  <tr>
-                    <td>Sunday</td>
-                    <td>Rest / easy walking</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-            <p>
-              You can move the days around. Ideally keep <strong>at least one day between the three main lifting sessions</strong>.
-            </p>
-          </div>
-        </details>
-
-        <details>
-          <summary>First 4 Weeks — Return-to-Gym Rule</summary>
-          <div className="reference-content">
-            <div className="ref-alert-box">
-              Because you’re coming back after 5–7 months, don’t immediately perform the full volume.
-            </div>
-            <p>
-              <strong>Weeks 1–2:</strong> Perform 2 working sets of almost every
-              exercise. Keep about 3–4 reps in reserve. No failure training.
-              Optional Day 4 = walking/cardio + mobility only.
-            </p>
-            <p>
-              <strong>Weeks 3–4:</strong> Move the important exercises to the
-              sets listed in the workout. Keep 2–3 reps in reserve. Introduce the light
-              athletic/power work.
-            </p>
-            <p>
-              <strong>Week 5 onward:</strong> Run the full program. Most sets
-              should finish with around 1–3 good reps still possible. You do not need
-              to train to failure to make progress.
-            </p>
-          </div>
-        </details>
-
-        <details>
-          <summary>Off Days</summary>
-          <div className="reference-content">
-            <p>
-              Aim for healthy recovery without complete inactivity (except where you’re genuinely tired). Easy walking is beneficial.
-            </p>
-            <p>
-              <strong>Daily Target:</strong> 20–40 minute walk, plus optionally:
-            </p>
-            <ul>
-              <li>Cat-cow &times; 8</li>
-              <li>Wall slides &times; 10</li>
-              <li>Kneeling hip-flexor stretch</li>
-              <li>Doorway pec stretch</li>
-              <li>Ankle mobility</li>
-            </ul>
-            <p>About 5–10 minutes total for mobility.</p>
-          </div>
-        </details>
-
-        <details>
-          <summary>Cardio Goal</summary>
-          <div className="reference-content">
-            <p>
-              Eventually aim to accumulate roughly <strong>150+ minutes of moderate
-              aerobic activity per week</strong>, consistent with standard adult
-              cardiovascular exercise recommendations.
-            </p>
-            <p>
-              Your gym cardio + walks can easily accomplish this. You do <strong>not</strong> have
-              to run. Walking, incline walking, cycling, elliptical, and rowing all count.
-            </p>
-          </div>
-        </details>
-
-        <details>
-          <summary>Posture + Decompression Routine</summary>
-          <div className="reference-content">
-            <p>
-              Perform this <strong>3–5 days/week</strong> to stand tall, decompress the spine, and maintain thoracic openness:
-            </p>
-            <ul>
-              <li><strong>Dead hang:</strong> 2–3 &times; 20–45 sec (do not hang painfully or force range)</li>
-              <li><strong>Wall slides:</strong> 1–2 &times; 10</li>
-              <li><strong>Chin tucks:</strong> 1–2 &times; 10–15</li>
-              <li><strong>Hip-flexor stretch:</strong> 30–45 sec/side</li>
-              <li><strong>Pec stretch:</strong> 30 sec/side</li>
-              <li><strong>Thoracic extension:</strong> 8–10 reps</li>
-            </ul>
-            <p>
-              Your strength training already contributes substantially through rows, face pulls, Y-raises, serratus work, lower traps, rear delts, rotator cuff, core, and glutes. Hanging and posture work help you stand naturally upright and temporarily decompress your spine.
-            </p>
-          </div>
-        </details>
-
-        <details>
-          <summary>How to Progress (Double Progression)</summary>
-          <div className="reference-content">
-            <p>
-              Suppose an exercise says <strong>3 &times; 8–12</strong>:
-            </p>
-            <ol>
-              <li>Start with a weight you can perform for <strong>10 / 9 / 8</strong> with clean technique.</li>
-              <li>Over following workouts aim for <strong>11 / 10 / 9</strong>, then <strong>12 / 11 / 10</strong>.</li>
-              <li>Eventually reach the top of the rep target: <strong>12 / 12 / 12</strong>.</li>
-              <li>Once you reach the top of the range with good form across all sets, increase the weight slightly and work your way back up.</li>
-            </ol>
-            <p>That is double progression—simple, safe, and effective.</p>
-          </div>
-        </details>
-
-        <details>
-          <summary>Rest Times</summary>
-          <div className="reference-content">
-            <p>
-              <strong>Big exercises (2–3 minutes):</strong> Squats, RDL, dumbbell presses, rows,
-              pulldowns, hip thrusts, leg press.
-            </p>
-            <p>
-              <strong>Smaller exercises (60–90 seconds):</strong> Curls, triceps, lateral
-              raises, cuff work, calves, forearms.
-            </p>
-            <p>
-              <strong>Athletic work:</strong> Rest enough for the next set to remain explosive.
-            </p>
-          </div>
-        </details>
-
-        <details>
-          <summary>Complete Body Audit (56 Functions) & Replacement Rule</summary>
-          <div className="reference-content">
-            <div className="ref-alert-box">
-              <strong>The Golden Rule:</strong> If you ever dislike an exercise, don’t just delete it. Replace it with an exercise that preserves <strong>exactly the same muscle and function</strong>. That way you maintain complete full-body coverage without creating holes in the plan.
-            </div>
-            <div className="ref-table-wrap">
-              <table className="ref-table">
-                <thead>
-                  <tr>
-                    <th>Region / Function</th>
-                    <th style={{ textAlign: "center", width: "120px" }}>Covered</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {[
-                    "Upper chest",
-                    "Mid/general chest",
-                    "Lower/sternal chest",
-                    "Serratus anterior",
-                    "Front delts",
-                    "Side delts",
-                    "Rear delts",
-                    "Rotator cuff",
-                    "Scapular stabilizers",
-                    "Upper traps",
-                    "Middle traps",
-                    "Lower traps",
-                    "Rhomboids",
-                    "Lats",
-                    "Teres major",
-                    "Spinal erectors",
-                    "Biceps",
-                    "Brachialis",
-                    "Brachioradialis",
-                    "All triceps heads",
-                    "Forearm flexors",
-                    "Forearm extensors",
-                    "Pronation/supination",
-                    "Grip",
-                    "Rectus abs",
-                    "Deep core",
-                    "Obliques",
-                    "Anti-extension",
-                    "Anti-rotation",
-                    "Anti-lateral flexion",
-                    "Glute max",
-                    "Glute medius",
-                    "Glute minimus",
-                    "Quads",
-                    "Hamstring hip extension",
-                    "Hamstring knee flexion",
-                    "Adductors",
-                    "Abductors",
-                    "Hip flexors",
-                    "Gastrocnemius",
-                    "Soleus",
-                    "Tibialis anterior",
-                    "Ankle inversion",
-                    "Ankle eversion",
-                    "Foot/arch muscles",
-                    "Neck flexion",
-                    "Neck extension",
-                    "Neck lateral flexion",
-                    "Neck rotation",
-                    "Balance",
-                    "Unilateral strength",
-                    "Grip/carries",
-                    "Explosive power",
-                    "Lateral movement",
-                    "Coordination",
-                    "Aerobic conditioning",
-                    "Higher-intensity conditioning",
-                    "Flexibility",
-                    "Mobility",
-                    "Posture",
-                    "Spinal decompression",
-                  ].map((item, idx) => (
-                    <tr key={idx}>
-                      <td>{item}</td>
-                      <td style={{ textAlign: "center", color: "var(--accent)", fontWeight: 700 }}>
-                        {item === "Higher-intensity conditioning" ? "✅ Optional" : "✅"}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </details>
+      <section className="reference-section" aria-label="Program notes">
+        <details><summary>Weekly rhythm & progression</summary><div className="reference-content">
+          <p><strong>Monday: Full Body A · Wednesday: Full Body B · Friday: Full Body C</strong></p>
+          <p>Move the days to suit your schedule, leaving a recovery day between lifting sessions.</p>
+          <p>When all working sets reach the top of the rep range with controlled form, increase the weight slightly and build up again.</p>
+          <p>For a 2–3 or 1–2 set prescription, use Remove set to choose the lower end. For per-side work, complete both sides before checking off one set.</p>
+        </div></details>
+        <details><summary>Cardio & finishing work</summary><div className="reference-content">
+          <p>Finish with 20–25 minutes of steady incline walking, cycling or elliptical at a conversational pace.</p>
+          <p>On Day 3, after rebuilding conditioning, you can instead do five rounds of 1 minute moderately hard and 2 minutes easy on the bike or elliptical (15 minutes).</p>
+          <p>Dead hangs and stretches are listed at the end of each day. Day 3 also includes the short neck, ankle and arch resilience block.</p>
+        </div></details>
+        <details><summary>Using your tracker</summary><div className="reference-content">
+          <p>Enter weights and reps, then check off each set. A placeholder is a suggestion until you enter it or mark the set complete. Set 1 weight fills empty, unfinished sets.</p>
+          <p>Use last copies the previous workout’s values for that set. Form guide opens the illustration and technique cues; images stay hidden until you ask for them.</p>
+          <p>Your entries save on this device immediately. Cloud status shows when syncing is available. Export a backup from the top of the page; older removed exercises remain in your exports.</p>
+        </div></details>
       </section>
 
       <footer className="app-footer">
